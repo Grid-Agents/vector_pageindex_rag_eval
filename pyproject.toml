@@ -1,0 +1,22 @@
+[project]
+name = "vector-pageindex-rag-eval"
+version = "0.1.0"
+description = "Evaluate vector RAG and PageIndex-style RAG on LegalBench-RAG."
+requires-python = ">=3.10"
+dependencies = [
+  "anthropic>=0.51.0",
+  "numpy>=1.26.0",
+  "pyyaml>=6.0.0",
+  "sentence-transformers>=3.0.0",
+  "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

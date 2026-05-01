@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.cache/
+data/
+results/*/
+results/*.json
+results/*.jsonl
+results/*.csv
+
+AGENTS.md
+prompt.md

@@ -1,0 +1,50 @@
+data:
+  data_dir: data
+  benchmarks: ["privacy_qa", "contractnli", "maud", "cuad"]
+  # "sampled" keeps experiments cheap; use "all" for a full-corpus retrieval run.
+  corpus_scope: sampled
+
+llm:
+  provider: anthropic
+  api_key_env: ANTHROPIC_API_KEY
+  model: claude-sonnet-4-6
+  max_tokens: 700
+  temperature: 0.0
+  pricing:
+    input_per_mtok_usd: 3.0
+    output_per_mtok_usd: 15.0
+    cache_read_per_mtok_usd: 0.30
+    cache_write_5m_per_mtok_usd: 3.75
+
+vector_rag:
+  chunk_strategy: hierarchical
+  chunk_size: 1200
+  chunk_overlap: 120
+  embedding_model: BAAI/bge-large-en-v1.5
+  query_instruction: "Represent this sentence for searching relevant passages: "
+  batch_size: 32
+  top_k: 20
+  reranker:
+    enabled: true
+    model: BAAI/bge-reranker-v2-m3
+    top_k: 5
+
+pageindex:
+  cache_dir: .cache/pageindex
+  force_reindex: false
+  build_with_llm: true
+  max_leaf_chars: 2400
+  group_size: 8
+  max_build_nodes: 80
+  max_tree_chars: 24000
+  selected_nodes: 5
+  max_retrieved_chars_per_node: 5000
+
+run:
+  results_dir: results
+  methods: ["vector", "pageindex"]
+  n: 5
+  seed: 42
+  answer_with_llm: true
+  max_answer_context_chars: 18000
+
