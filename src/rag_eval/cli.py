@@ -15,7 +15,12 @@ def main() -> None:
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--data-dir", help="Override LegalBench-RAG data directory.")
     parser.add_argument("--results-dir", help="Override results directory.")
-    parser.add_argument("--benchmarks", help="Comma-separated benchmark names or all.")
+    parser.add_argument(
+        "--benchmark",
+        "--benchmarks",
+        dest="benchmarks",
+        help="Benchmark name, comma-separated benchmark names, or all.",
+    )
     parser.add_argument("--methods", help="Comma-separated methods: vector,pageindex.")
     parser.add_argument("--n", type=int, help="Number of examples to run.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
@@ -24,7 +29,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, help="Vector retrieval candidate top-k.")
     parser.add_argument("--rerank-top-k", type=int, help="Reranker output top-k.")
     parser.add_argument("--retrieval-only", action="store_true", help="Skip answer generation.")
-    parser.add_argument("--force-reindex", action="store_true", help="Rebuild PageIndex ToC cache.")
+    parser.add_argument("--force-reindex", action="store_true", help="Rebuild vector and PageIndex caches.")
     parser.add_argument("--run-id", help="Custom run id.")
     args = parser.parse_args()
 
@@ -68,6 +73,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     if args.retrieval_only:
         cfg["run"]["answer_with_llm"] = False
     if args.force_reindex:
+        cfg["vector_rag"]["force_reindex"] = True
         cfg["pageindex"]["force_reindex"] = True
     if args.run_id:
         cfg["run"]["run_id"] = args.run_id
@@ -75,4 +81,3 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -11,14 +11,20 @@ The runner records retrieved spans, answers, exact character-overlap retrieval m
 
 ```bash
 cd vector_pageindex_rag_eval
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --dev
 cp .env.example .env
 export ANTHROPIC_API_KEY=your_claude_api_key_here
 ```
 
-Download LegalBench-RAG from the upstream data link and place it here:
+Download LegalBench-RAG into `data/` with:
+
+```bash
+mkdir -p data
+curl -L 'https://www.dropbox.com/scl/fo/r7xfa5i3hdsbxex1w6amw/AID389Olvtm-ZLTKAPrw6k4?rlkey=5n8zrbk4c08lbit3iiexofmwg&dl=1' -o /tmp/legalbenchrag.zip
+unzip -q /tmp/legalbenchrag.zip -d data
+```
+
+This will create:
 
 ```text
 vector_pageindex_rag_eval/
@@ -36,16 +42,24 @@ LegalBench-RAG benchmark JSON files contain `tests`; each test has a `query` and
 
 ## Run
 
-Cheap smoke run on two sampled questions:
+By default, `configs/default.yaml` runs the CUAD benchmark (`data/benchmarks/cuad.json`). Override it with `--benchmark` for one benchmark, `--benchmarks` for a comma-separated list, or `all` for every benchmark in `data/benchmarks`.
+
+Cheap smoke run on two sampled CUAD questions:
 
 ```bash
-python run_experiment.py --n 2 --methods vector,pageindex
+uv run python run_experiment.py --n 2 --methods vector,pageindex
+```
+
+Run a different benchmark:
+
+```bash
+uv run python run_experiment.py --benchmark maud --n 10 --methods vector
 ```
 
 Useful overrides:
 
 ```bash
-python run_experiment.py \
+uv run python run_experiment.py \
   --n 20 \
   --benchmarks cuad,maud \
   --methods vector,pageindex \
@@ -53,6 +67,18 @@ python run_experiment.py \
   --top-k 30 \
   --rerank-top-k 5 \
   --corpus-scope sampled
+```
+
+You can also use the shell wrapper:
+
+```bash
+scripts/run_experiment.sh --benchmark cuad --n 5 --methods vector,pageindex
+```
+
+Run tests with:
+
+```bash
+uv run pytest
 ```
 
 Use `--corpus-scope all` when you want retrieval over the full corpus instead of only the documents needed by the sampled gold spans. That is closer to the full benchmark, but slower and more expensive for PageIndex indexing.
@@ -77,6 +103,8 @@ Edit `configs/default.yaml` for model and pipeline settings. Claude defaults to 
 
 Vector RAG settings:
 
+- `cache_dir`: persisted chunk metadata and embedding matrix cache
+- `force_reindex`: rebuild cached vector embeddings
 - `chunk_strategy`: `hierarchical`, `recursive`, or `fixed`
 - `embedding_model`: default `BAAI/bge-large-en-v1.5`
 - `reranker.model`: default `BAAI/bge-reranker-v2-m3`
@@ -97,4 +125,3 @@ Retrieval metrics match LegalBench-RAG’s character-overlap spirit:
 - F1 = harmonic mean of precision and recall
 
 Answers are saved for qualitative review; the benchmark score is based on retrieved character spans.
-

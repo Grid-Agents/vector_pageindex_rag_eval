@@ -54,7 +54,13 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     systems = {}
     setup_usage_by_method: dict[str, Usage] = {}
     if "vector" in methods:
-        vector = VectorRAG(cfg.get("vector_rag", {}))
+        vector_cfg = cfg.get("vector_rag", {})
+        vector = VectorRAG(
+            vector_cfg,
+            cache_dir=resolve_path(
+                PROJECT_ROOT, vector_cfg.get("cache_dir", ".cache/vector")
+            ),
+        )
         print(f"Building vector index for {len(documents)} documents...")
         vector.build(documents)
         systems["vector"] = vector
