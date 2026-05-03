@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONFIG="configs/default.yaml"
 BENCHMARKS="cuad"
-N="5"
+N="10"
 METHODS="vector,pageindex"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
