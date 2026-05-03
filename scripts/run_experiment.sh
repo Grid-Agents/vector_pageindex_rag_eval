@@ -11,6 +11,7 @@ TOP_K=""
 RERANK_TOP_K=""
 RUN_ID=""
 RETRIEVAL_ONLY="false"
+ANSWER_WITH_LLM="false"
 FORCE_REINDEX="false"
 EXTRA_ARGS=()
 
@@ -23,11 +24,12 @@ Options:
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Number of examples. Default: 5.
   --methods LIST            Comma-separated methods. Default: vector,pageindex.
-  --corpus-scope SCOPE      sampled or all. Default: sampled.
+  --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, or fixed.
   --top-k N                 Vector retrieval candidate top-k.
   --rerank-top-k N          Reranker output top-k.
-  --retrieval-only          Skip answer generation.
+  --answer-with-llm         Generate qualitative answers after retrieval. Saved as diagnostics only.
+  --retrieval-only          Skip answer generation. Default and recommended for document metrics.
   --force-reindex           Rebuild PageIndex ToC cache.
   --run-id ID               Custom run id.
   --config PATH             Config file. Default: configs/default.yaml.
@@ -67,6 +69,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --retrieval-only)
       RETRIEVAL_ONLY="true"
+      shift
+      ;;
+    --answer-with-llm)
+      ANSWER_WITH_LLM="true"
       shift
       ;;
     --force-reindex)
@@ -120,6 +126,9 @@ if [[ -n "$RUN_ID" ]]; then
 fi
 if [[ "$RETRIEVAL_ONLY" == "true" ]]; then
   cmd+=(--retrieval-only)
+fi
+if [[ "$ANSWER_WITH_LLM" == "true" ]]; then
+  cmd+=(--answer-with-llm)
 fi
 if [[ "$FORCE_REINDEX" == "true" ]]; then
   cmd+=(--force-reindex)

@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 def run_experiment(cfg: dict[str, Any]) -> Path:
     run_cfg = cfg.get("run", {})
     data_cfg = cfg.get("data", {})
+    answer_with_llm = bool(run_cfg.get("answer_with_llm", False))
     started_at = datetime.now(timezone.utc)
     run_id = run_cfg.get("run_id") or started_at.strftime("%Y%m%dT%H%M%SZ")
     results_dir = resolve_path(PROJECT_ROOT, run_cfg.get("results_dir", "results"))
@@ -48,7 +49,7 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
     llm = None
-    if run_cfg.get("answer_with_llm", True) or "pageindex" in methods:
+    if answer_with_llm or "pageindex" in methods:
         llm = AnthropicLLM(cfg.get("llm", {}))
 
     systems = {}
@@ -91,7 +92,7 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
                 system=system,
                 example=example,
                 llm=llm,
-                answer_with_llm=bool(run_cfg.get("answer_with_llm", True)),
+                answer_with_llm=answer_with_llm,
                 max_answer_context_chars=int(
                     run_cfg.get("max_answer_context_chars", 18000)
                 ),
@@ -108,8 +109,14 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
                             "precision",
                             "recall",
                             "f1",
+                            "document_precision",
+                            "document_recall",
+                            "document_f1",
                             "retrieved_chars",
                             "overlap_chars",
+                            "retrieved_document_count",
+                            "matched_document_count",
+                            "retrieved_span_count",
                             "wall_clock_seconds",
                             "estimated_cost_usd",
                             "input_tokens",
@@ -142,7 +149,6 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     _write_summary_csv(run_dir / "summary.csv", rows)
-    generate_dashboard(results_dir, results_dir / "visulization.html")
     generate_dashboard(results_dir, results_dir / "visualization.html")
     return run_dir
 
@@ -159,12 +165,15 @@ def _run_method(
     started = time.perf_counter()
     usage = Usage()
     answer = ""
+    answer_generated = False
     retrieval = RetrievalOutput(spans=[])
     error = ""
     try:
         retrieval = system.query(example.query)
         usage.add(retrieval.usage)
         if answer_with_llm:
+            if llm is None:
+                raise RuntimeError("answer_with_llm requires a configured LLM")
             response = answer_question(
                 llm,
                 query=example.query,
@@ -172,6 +181,7 @@ def _run_method(
                 max_context_chars=max_answer_context_chars,
             )
             answer = response.text
+            answer_generated = True
             usage.add(response.usage)
     except Exception as exc:  # noqa: BLE001
         error = f"{type(exc).__name__}: {exc}"
@@ -182,6 +192,8 @@ def _run_method(
     return {
         "method": method_name,
         **metrics,
+        "evaluation_target": "retrieval",
+        "answer_generated": answer_generated,
         "answer": answer,
         "retrieved_spans": [span.to_dict() for span in retrieval.spans],
         "retrieval_metadata": retrieval.metadata,
@@ -208,6 +220,10 @@ def _aggregate(
                 "mean_precision": 0.0,
                 "mean_recall": 0.0,
                 "mean_f1": 0.0,
+                "mean_document_precision": 0.0,
+                "mean_document_recall": 0.0,
+                "mean_document_f1": 0.0,
+                "query_cost_usd": 0.0,
                 "query_answer_cost_usd": 0.0,
                 "setup_cost_usd": setup_usage_by_method.get(
                     method, Usage()
@@ -223,7 +239,13 @@ def _aggregate(
         bucket["mean_precision"] += float(row.get("precision") or 0.0)
         bucket["mean_recall"] += float(row.get("recall") or 0.0)
         bucket["mean_f1"] += float(row.get("f1") or 0.0)
-        bucket["query_answer_cost_usd"] += float(row.get("estimated_cost_usd") or 0.0)
+        bucket["mean_document_precision"] += float(
+            row.get("document_precision") or 0.0
+        )
+        bucket["mean_document_recall"] += float(row.get("document_recall") or 0.0)
+        bucket["mean_document_f1"] += float(row.get("document_f1") or 0.0)
+        bucket["query_cost_usd"] += float(row.get("estimated_cost_usd") or 0.0)
+        bucket["query_answer_cost_usd"] = bucket["query_cost_usd"]
         bucket["input_tokens"] += int(row.get("input_tokens") or 0)
         bucket["output_tokens"] += int(row.get("output_tokens") or 0)
         bucket["mean_wall_clock_seconds"] += float(
@@ -238,15 +260,20 @@ def _aggregate(
             "mean_precision",
             "mean_recall",
             "mean_f1",
+            "mean_document_precision",
+            "mean_document_recall",
+            "mean_document_f1",
             "mean_wall_clock_seconds",
         ):
             bucket[key] /= n
         bucket["total_cost_usd"] = (
-            bucket["query_answer_cost_usd"] + bucket["setup_cost_usd"]
+            bucket["query_cost_usd"] + bucket["setup_cost_usd"]
         )
         total += bucket["total_cost_usd"]
     return {
         "n_rows": len(rows),
+        "primary_metric": "document_f1",
+        "primary_metric_family": "document",
         "total_realized_cost_usd": total,
         "by_method": by_method,
     }
@@ -257,11 +284,17 @@ def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "example_id",
         "benchmark",
         "method",
+        "document_precision",
+        "document_recall",
+        "document_f1",
         "precision",
         "recall",
         "f1",
         "retrieved_chars",
         "overlap_chars",
+        "retrieved_document_count",
+        "matched_document_count",
+        "retrieved_span_count",
         "wall_clock_seconds",
         "estimated_cost_usd",
         "input_tokens",

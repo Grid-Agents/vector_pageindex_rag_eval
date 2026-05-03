@@ -3,9 +3,9 @@
 This repo runs small or full LegalBench-RAG experiments comparing:
 
 - `vector`: hierarchical chunking by default, local sentence-transformer embeddings, and the open-source `BAAI/bge-reranker-v2-m3` reranker.
-- `pageindex`: a PageIndex-style semantic table-of-contents tree built with Claude, followed by Claude reasoning over the tree at query time.
+- `pageindex`: a PageIndex-style semantic table-of-contents tree built over virtual pages, with Claude semanticizing every page/span at build time and then traversing the tree to page nodes at query time.
 
-The runner records retrieved spans, answers, exact character-overlap retrieval metrics, token usage, and estimated Claude cost in USD.
+The runner records retrieved spans, exact character-overlap retrieval metrics, document-level retrieval metrics, token usage, and estimated Claude cost in USD. Generated answers are optional and are not scored.
 
 ## Setup
 
@@ -75,13 +75,23 @@ You can also use the shell wrapper:
 scripts/run_experiment.sh --benchmark cuad --n 5 --methods vector,pageindex
 ```
 
+Runs are retrieval-only by default. Pass `--answer-with-llm` only when you want qualitative answers saved alongside the retrieval results; those answers are not part of precision, recall, or F1.
+
+If you only want to warm caches without running retrieval, use the build-only script:
+
+```bash
+scripts/build_indexes.sh --methods pageindex --benchmark cuad --corpus-scope all
+scripts/build_indexes.sh --methods vector --benchmark cuad --corpus-scope all
+scripts/build_indexes.sh --methods vector,pageindex --benchmark cuad --corpus-scope all --force-reindex
+```
+
 Run tests with:
 
 ```bash
 uv run pytest
 ```
 
-Use `--corpus-scope all` when you want retrieval over the full corpus instead of only the documents needed by the sampled gold spans. That is closer to the full benchmark, but slower and more expensive for PageIndex indexing.
+Use `--corpus-scope all` when you want retrieval over the full selected benchmark corpus instead of only the documents needed by the sampled gold spans. That is closer to the full benchmark, but slower and more expensive for PageIndex indexing.
 
 ## Results
 
@@ -91,11 +101,10 @@ Each run writes:
 results/<run_id>/run.json
 results/<run_id>/results.jsonl
 results/<run_id>/summary.csv
-results/visulization.html
 results/visualization.html
 ```
 
-Open `results/visulization.html` to inspect run-level metrics, per-question qualitative answers, retrieved spans, and the PageIndex ToC tree tab.
+Open `results/visualization.html` to inspect run-level retrieval metrics, per-question gold snippets, retrieved spans, and the PageIndex ToC tree tab.
 
 ## Config
 
@@ -112,9 +121,15 @@ Vector RAG settings:
 PageIndex settings:
 
 - `cache_dir`: semantic ToC cache
-- `build_with_llm`: use Claude to summarize/semanticize ToC nodes
-- `selected_nodes`: max nodes selected during tree reasoning
-- `max_retrieved_chars_per_node`: retrieval span cap for broad nodes
+- `build_with_llm`: use Claude to semanticize virtual pages and parent spans
+- `virtual_page_target_tokens`: target size of each synthetic page
+- `virtual_page_max_tokens`: hard cap for each synthetic page
+- `toc_check_units`: how many virtual pages to scan for an existing ToC or early heading structure
+- `max_units_per_node`: max virtual-page span for a non-root ToC node
+- `max_tokens_per_node`: max estimated token span for a non-root ToC node
+- `selected_documents`: max documents shortlisted before per-document node selection
+- `selected_nodes`: max final page nodes selected during tree traversal
+- `max_retrieved_chars_per_node`: retrieval span cap for returned page nodes
 
 ## Metrics
 
@@ -124,4 +139,4 @@ Retrieval metrics match LegalBench-RAG’s character-overlap spirit:
 - Recall = overlapping retrieved characters / gold characters
 - F1 = harmonic mean of precision and recall
 
-Answers are saved for qualitative review; the benchmark score is based on retrieved character spans.
+The runner also records document-level precision, recall, and F1 from unique retrieved `document_id` values. The benchmark score is based on retrieved character spans unless you explicitly choose to analyze document-level metrics.

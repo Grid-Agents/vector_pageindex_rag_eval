@@ -5,7 +5,7 @@ This repo compares two retrieval pipelines over LegalBench-RAG text files:
 - `vector`: chunk text, embed chunks locally, search by cosine similarity, then optionally rerank.
 - `pageindex`: build a semantic table-of-contents tree per document, then ask an LLM to navigate the tree and select relevant nodes.
 
-Both implementations return the same `RetrievalOutput` shape: a list of `RetrievedSpan` objects with `document_id`, exact character offsets, retrieved text, score, and retriever metadata. The runner can then answer with an LLM and score retrieval with character-level overlap against LegalBench-RAG gold spans.
+Both implementations return the same `RetrievalOutput` shape: a list of `RetrievedSpan` objects with `document_id`, exact character offsets, retrieved text, score, and retriever metadata. The runner scores retrieval with character-level overlap against LegalBench-RAG gold spans, plus document-level hit metrics. Optional generated answers are saved only for qualitative review.
 
 ## Shared Data Flow
 
@@ -19,7 +19,7 @@ The experiment entrypoint is `run_experiment()` in `src/rag_eval/runner.py`.
    - `all`: every file under `data/corpus`.
 5. The selected retrieval methods are built once over the loaded documents.
 6. For each query, every method returns retrieved character spans.
-7. If `run.answer_with_llm` is true, `answer_question()` sends the retrieved snippets to the configured Claude model and asks it to answer using only those snippets.
+7. If `run.answer_with_llm` is true, `answer_question()` sends the retrieved snippets to the configured Claude model and asks it to answer using only those snippets. This is disabled by default and is not scored.
 8. Retrieval quality is scored by exact span overlap in `src/rag_eval/metrics.py`.
 
 The important contract is character offsets. Retrieval is not just returning strings; every returned span maps back to `[start_char:end_char]` in a LegalBench-RAG corpus file.
@@ -45,7 +45,7 @@ Each `Chunk` keeps:
 - `title`
 - `level`
 
-The vector retriever embeds these chunks directly. PageIndex uses larger no-overlap chunks as leaves in its fallback tree.
+The vector retriever embeds these chunks directly. PageIndex instead creates synthetic "virtual pages" over the raw text and uses those page nodes as the base unit of its ToC tree.
 
 ## Vector RAG
 
@@ -148,7 +148,7 @@ Returned vector spans include metadata:
 }
 ```
 
-Vector RAG has no LLM setup cost. It uses local embedding and reranking models, then optionally incurs answer-generation cost if `run.answer_with_llm` is enabled.
+Vector RAG has no LLM setup cost. It uses local embedding and reranking models, then incurs answer-generation cost only if `run.answer_with_llm` is enabled.
 
 ## PageIndex RAG
 
@@ -156,9 +156,9 @@ The PageIndex-style implementation is `PageIndexRAG` in `src/rag_eval/pageindex_
 
 This is not a full upstream PageIndex PDF/Markdown index. It adapts the PageIndex idea to LegalBench-RAG raw text files:
 
-- build a semantic tree of document regions;
+- build a semantic tree over virtual pages that cover the full document;
 - expose that tree as a compact table of contents;
-- ask an LLM to select the smallest relevant nodes for a query;
+- ask an LLM to choose relevant documents, then select the smallest relevant nodes within those document trees;
 - return the selected nodes' original character spans.
 
 ### Build Step
@@ -175,21 +175,21 @@ pageindex:
 
 The cache filename is based on the document id, document length, and SHA-1 hash of document text. If the document content changes, the cache key changes.
 
-If no valid cache exists, the system creates a fallback tree:
+If no valid cache exists, the system creates a virtual-page tree:
 
-1. The document is chunked with `strategy="hierarchical"`.
-2. Leaf size is controlled by `pageindex.max_leaf_chars`.
-3. Leaf chunks have zero overlap.
-4. Each leaf receives a stable node id based on a hash of the document id plus a numeric suffix.
-5. Leaves are grouped into parent nodes of size `pageindex.group_size`.
+1. The document is partitioned into contiguous `virtual pages` under `pageindex.virtual_page_target_tokens` and `pageindex.virtual_page_max_tokens`.
+2. Virtual page boundaries are aligned to detected section boundaries when possible, so a page does not usually cross a heading-defined section.
+3. The first `pageindex.toc_check_units` virtual pages are scanned for an existing ToC or early heading structure.
+4. Each virtual page becomes a leaf node with a stable `node_id`.
+5. Contiguous leaf pages are grouped into non-root span nodes with caps from `pageindex.max_units_per_node` and `pageindex.max_tokens_per_node`.
 6. A root node spans the whole document.
 
 The default shape is:
 
 ```text
 root document node
-  group node covering about 8 leaves
-    leaf node covering a legal section or recursive chunk
+  span node covering up to about 10 virtual pages
+    page node covering one virtual page
 ```
 
 Every node stores:
@@ -199,37 +199,23 @@ Every node stores:
 - `summary`
 - `start_char`
 - `end_char`
+- `unit_start`
+- `unit_end`
+- `token_count`
 - `children`
 
-The fallback tree is already usable because titles and previews come from detected sections and text previews.
+The heuristic tree is already usable because titles come from detected sections and summaries come from page/span previews.
 
 ### LLM Semanticization
 
-If `pageindex.build_with_llm` is true, `_semanticize_tree()` asks the configured LLM to improve the tree metadata.
+If `pageindex.build_with_llm` is true, the builder semanticizes the tree bottom-up:
 
-The prompt sends up to `pageindex.max_build_nodes` flattened nodes. For each node, it includes:
+1. Every virtual page leaf is sent to the LLM with its full page text.
+2. The LLM returns a short page title and summary.
+3. Each non-root span node is then summarized from its child node titles and summaries.
+4. The root node is summarized from its top-level children.
 
-- `node_id`
-- current title
-- character range
-- a short text preview
-
-The LLM must return JSON:
-
-```json
-{
-  "document_summary": "...",
-  "nodes": [
-    {
-      "node_id": "...",
-      "title": "...",
-      "summary": "..."
-    }
-  ]
-}
-```
-
-The implementation updates only titles and summaries. It does not allow the LLM to change node ids or character ranges. This keeps retrieval grounded in original corpus offsets.
+This means the LLM sees the full document content, but never all at once. It reads every page leaf directly, then works upward from child summaries for broader nodes.
 
 Setup token usage from tree semanticization is accumulated in `pageindex.setup_usage` and recorded separately from per-query usage in `run.json`.
 
@@ -239,13 +225,14 @@ If semanticization fails, the fallback tree is still cached and used. The build 
 
 `PageIndexRAG.query(query)` does the following:
 
-1. Formats all document trees into a "Semantic ToC forest".
-2. Truncates that forest to `pageindex.max_tree_chars`.
-3. Sends the query plus tree text to the LLM.
-4. Asks the LLM to select up to `pageindex.selected_nodes` relevant `node_id` values.
-5. Parses the JSON selection response.
-6. Looks up each selected node in `node_index`.
-7. Returns the node's original document character span.
+1. Formats a compact document catalog using each document's summary plus representative section titles.
+2. Sends the query plus document catalog to the LLM.
+3. Asks the LLM to choose up to `pageindex.selected_documents` relevant `document_id` values.
+4. For each selected document, starts at the root and shows only that node's immediate children.
+5. The LLM selects relevant child nodes.
+6. For every selected non-leaf node, the retriever descends another level and repeats the child selection step.
+7. Traversal continues until it reaches page leaves.
+8. The selected page nodes are returned using their original document character spans.
 
 ### Multi-Document Routing
 
@@ -272,23 +259,16 @@ document_id -> tree
 node_id -> (document_id, node)
 ```
 
-At query time, `_format_forest()` prints every document tree into one text prompt. The formatted forest is grouped by document:
+At query time, PageIndex first builds a compact document catalog:
 
 ```text
-DOCUMENT cuad/doc-a.txt
-- doc-a-root [0:12000] ...
-  - doc-a-g000 [0:5000] ...
-    - doc-a-0000 [0:1200] ...
-
-DOCUMENT cuad/doc-b.txt
-- doc-b-root [0:9000] ...
-  - doc-b-g000 [0:4800] ...
-    - doc-b-0000 [0:1300] ...
+- cuad/doc-a.txt: summary... | sections: Grant of License; Liability; Insurance
+- cuad/doc-b.txt: summary... | sections: Term; Confidentiality; Indemnification
 ```
 
-The LLM sees the query plus this forest and chooses `node_id` values. There is no separate embedding lookup, metadata filter, or first-stage document classifier for PageIndex. The selected node id is the document decision.
+The LLM sees the query plus this catalog and chooses `document_id` values. After that, PageIndex traverses each chosen document tree level by level instead of dumping the entire tree into one prompt.
 
-After the LLM returns selections, the implementation resolves each selected node through `self.node_index`:
+After the LLM returns node selections, the implementation resolves each selected node through `self.node_index`:
 
 ```python
 doc_id, node = self.node_index[node_id]
@@ -306,9 +286,9 @@ RetrievedSpan(
 )
 ```
 
-This means PageIndex document selection is prompt-based. The agent chooses the document by inspecting document headings, node titles, summaries, and ranges in the visible forest, then selecting nodes from the document that appears relevant.
+This means PageIndex document selection is still prompt-based, but node routing is now a staged tree walk: root children first, then narrower descendants, until page nodes are selected.
 
-One practical consequence is that `pageindex.max_tree_chars` matters a lot for multi-document runs. `_format_forest()` sorts documents by `document_id`, concatenates their trees, and truncates the resulting text if it exceeds the configured limit. If many documents are indexed, later document trees may be partially or fully omitted from the selection prompt. In that case, the LLM cannot choose nodes it never sees. `data.corpus_scope: sampled` keeps this cheap and usually small; `data.corpus_scope: all` is closer to full-corpus retrieval but increases the chance that the forest is truncated.
+One practical consequence is that `pageindex.max_tree_chars` now applies only to the current child list shown at a traversal step, not to the whole document tree. This lets PageIndex handle much longer documents without hiding later sections behind one monolithic prompt.
 
 The selection prompt asks for:
 
@@ -323,7 +303,7 @@ The selection prompt asks for:
 }
 ```
 
-If selection or JSON parsing fails, PageIndex falls back to `_keyword_fallback()`. That fallback scores nodes by matching query terms longer than three characters against node titles and summaries.
+If document selection or node selection fails, PageIndex falls back to keyword scoring. Document fallback matches query terms against document ids, summaries, and representative section titles. Node fallback prefers page leaves and scores titles/summaries within the current document or subtree.
 
 Returned PageIndex spans include metadata:
 
@@ -345,9 +325,14 @@ pageindex:
   cache_dir: .cache/pageindex
   force_reindex: false
   build_with_llm: true
-  max_leaf_chars: 2400
-  group_size: 8
-  max_build_nodes: 80
+  virtual_page_target_tokens: 900
+  virtual_page_max_tokens: 1200
+  toc_check_units: 20
+  max_units_per_node: 10
+  max_tokens_per_node: 20000
+  node_summary_max_tokens: 220
+  root_summary_max_tokens: 260
+  selected_documents: 3
   max_tree_chars: 24000
   selected_nodes: 5
   max_retrieved_chars_per_node: 5000
@@ -373,5 +358,13 @@ Retrieval metrics are computed from character ranges:
 - precision = overlapping retrieved characters / retrieved characters
 - recall = overlapping retrieved characters / gold characters
 - F1 = harmonic mean of precision and recall
+
+Document-level metrics are also recorded from unique `document_id` matches:
+
+- document_precision = matched gold documents / retrieved documents
+- document_recall = matched gold documents / gold documents
+- document_F1 = harmonic mean of document precision and recall
+
+Generated answers are not part of any aggregate score.
 
 For PageIndex runs, `run.json` also includes `toc_trees`, which is useful for inspecting what the LLM navigated during query-time selection.

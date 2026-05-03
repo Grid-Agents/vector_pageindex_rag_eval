@@ -25,19 +25,24 @@ vector_rag:
   embedding_model: BAAI/bge-large-en-v1.5
   query_instruction: "Represent this sentence for searching relevant passages: "
   batch_size: 32
-  top_k: 30
+  top_k: 20
   reranker:
     enabled: true
     model: BAAI/bge-reranker-v2-m3
-    top_k: 10
+    top_k: 5
 
 pageindex:
   cache_dir: .cache/pageindex
   force_reindex: false
   build_with_llm: true
-  max_leaf_chars: 2400
-  group_size: 8
-  max_build_nodes: 80
+  virtual_page_target_tokens: 900
+  virtual_page_max_tokens: 1200
+  toc_check_units: 20
+  max_units_per_node: 10
+  max_tokens_per_node: 20000
+  node_summary_max_tokens: 220
+  root_summary_max_tokens: 260
+  selected_documents: 3
   max_tree_chars: 24000
   selected_nodes: 5
   max_retrieved_chars_per_node: 5000
@@ -47,5 +52,6 @@ run:
   methods: ["vector", "pageindex"]
   n: 10
   seed: 42
-  answer_with_llm: true
+  # Retrieval metrics are scored against benchmark snippets, not generated answers.
+  answer_with_llm: false
   max_answer_context_chars: 18000

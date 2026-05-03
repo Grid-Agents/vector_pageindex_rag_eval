@@ -65,6 +65,22 @@ def score_retrieval(
         if precision + recall > 0
         else 0.0
     )
+
+    gold_doc_ids = set(gold_by_doc)
+    pred_doc_ids = set(pred_by_doc)
+    matched_doc_count = len(gold_doc_ids & pred_doc_ids)
+    document_precision = (
+        matched_doc_count / len(pred_doc_ids) if pred_doc_ids else 0.0
+    )
+    document_recall = matched_doc_count / len(gold_doc_ids) if gold_doc_ids else 0.0
+    document_f1 = (
+        2
+        * document_precision
+        * document_recall
+        / (document_precision + document_recall)
+        if document_precision + document_recall > 0
+        else 0.0
+    )
     return {
         "precision": precision,
         "recall": recall,
@@ -72,6 +88,12 @@ def score_retrieval(
         "gold_chars": gold_total,
         "retrieved_chars": pred_total,
         "overlap_chars": overlap_total,
-        "retrieved_spans": len(retrieved_spans),
+        "gold_document_count": len(gold_doc_ids),
+        "retrieved_document_count": len(pred_doc_ids),
+        "matched_document_count": matched_doc_count,
+        "document_precision": document_precision,
+        "document_recall": document_recall,
+        "document_f1": document_f1,
+        "gold_span_count": len(gold_spans),
+        "retrieved_span_count": len(retrieved_spans),
     }
-

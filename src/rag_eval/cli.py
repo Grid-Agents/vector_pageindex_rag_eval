@@ -28,7 +28,16 @@ def main() -> None:
     parser.add_argument("--chunk-strategy", choices=["hierarchical", "recursive", "fixed"])
     parser.add_argument("--top-k", type=int, help="Vector retrieval candidate top-k.")
     parser.add_argument("--rerank-top-k", type=int, help="Reranker output top-k.")
-    parser.add_argument("--retrieval-only", action="store_true", help="Skip answer generation.")
+    parser.add_argument(
+        "--answer-with-llm",
+        action="store_true",
+        help="Generate qualitative answers after retrieval. Answers are not scored.",
+    )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip answer generation. This is the default.",
+    )
     parser.add_argument("--force-reindex", action="store_true", help="Rebuild vector and PageIndex caches.")
     parser.add_argument("--run-id", help="Custom run id.")
     args = parser.parse_args()
@@ -40,7 +49,7 @@ def main() -> None:
     apply_overrides(cfg, args)
     run_dir = run_experiment(cfg)
     print(f"Run saved to: {run_dir}")
-    print(f"Dashboard: {run_dir.parent / 'visulization.html'}")
+    print(f"Dashboard: {run_dir.parent / 'visualization.html'}")
 
 
 def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
@@ -70,6 +79,8 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["vector_rag"]["top_k"] = args.top_k
     if args.rerank_top_k is not None:
         cfg["vector_rag"]["reranker"]["top_k"] = args.rerank_top_k
+    if args.answer_with_llm:
+        cfg["run"]["answer_with_llm"] = True
     if args.retrieval_only:
         cfg["run"]["answer_with_llm"] = False
     if args.force_reindex:

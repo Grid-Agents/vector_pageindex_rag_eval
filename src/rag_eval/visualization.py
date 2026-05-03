@@ -26,7 +26,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LegalBench-RAG Evaluation</title>
+<title>LegalBench-RAG Retrieval Evaluation</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f7f5; color: #202124; }
@@ -89,7 +89,7 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 </head>
 <body>
 <div class="topbar">
-  <h1>LegalBench-RAG Evaluation</h1>
+  <h1>LegalBench-RAG Retrieval Evaluation</h1>
   <label>Run <select id="run-select"></select></label>
   <span id="run-meta" class="meta"></span>
   <div class="tabs">
@@ -116,7 +116,183 @@ let currentRun = null;
 let currentExample = 0;
 let currentTocDoc = 0;
 
+function mergeRanges(ranges) {
+  const sorted = (ranges || [])
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((a, b) => a[0] - b[0]);
+  if (!sorted.length) return [];
+  const merged = [sorted[0].slice()];
+  for (const [start, end] of sorted.slice(1)) {
+    const last = merged[merged.length - 1];
+    if (start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+function rangeLen(ranges) {
+  return (ranges || []).reduce((total, [start, end]) => total + (end - start), 0);
+}
+
+function overlapLen(a, b) {
+  let i = 0;
+  let j = 0;
+  let total = 0;
+  while (i < a.length && j < b.length) {
+    const start = Math.max(a[i][0], b[j][0]);
+    const end = Math.min(a[i][1], b[j][1]);
+    if (end > start) total += end - start;
+    if (a[i][1] < b[j][1]) i += 1;
+    else j += 1;
+  }
+  return total;
+}
+
+function computeDocumentMetrics(goldSpans, retrievedSpans) {
+  const goldByDoc = new Map();
+  const predByDoc = new Map();
+  for (const span of goldSpans || []) {
+    if (!goldByDoc.has(span.document_id)) goldByDoc.set(span.document_id, []);
+    goldByDoc.get(span.document_id).push([span.start_char, span.end_char]);
+  }
+  for (const span of retrievedSpans || []) {
+    if (!predByDoc.has(span.document_id)) predByDoc.set(span.document_id, []);
+    predByDoc.get(span.document_id).push([span.start_char, span.end_char]);
+  }
+
+  const allDocIds = new Set([...goldByDoc.keys(), ...predByDoc.keys()]);
+  let goldTotal = 0;
+  let predTotal = 0;
+  let overlapTotal = 0;
+  for (const docId of allDocIds) {
+    const goldRanges = mergeRanges(goldByDoc.get(docId) || []);
+    const predRanges = mergeRanges(predByDoc.get(docId) || []);
+    goldTotal += rangeLen(goldRanges);
+    predTotal += rangeLen(predRanges);
+    overlapTotal += overlapLen(goldRanges, predRanges);
+  }
+
+  const goldDocIds = new Set(goldByDoc.keys());
+  const predDocIds = new Set(predByDoc.keys());
+  const matchedDocumentCount = [...goldDocIds].filter(docId => predDocIds.has(docId)).length;
+  const precision = predTotal ? overlapTotal / predTotal : 0;
+  const recall = goldTotal ? overlapTotal / goldTotal : 0;
+  const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
+  const documentPrecision = predDocIds.size ? matchedDocumentCount / predDocIds.size : 0;
+  const documentRecall = goldDocIds.size ? matchedDocumentCount / goldDocIds.size : 0;
+  const documentF1 = documentPrecision + documentRecall > 0
+    ? (2 * documentPrecision * documentRecall) / (documentPrecision + documentRecall)
+    : 0;
+
+  return {
+    precision,
+    recall,
+    f1,
+    gold_chars: goldTotal,
+    retrieved_chars: predTotal,
+    overlap_chars: overlapTotal,
+    gold_document_count: goldDocIds.size,
+    retrieved_document_count: predDocIds.size,
+    matched_document_count: matchedDocumentCount,
+    document_precision: documentPrecision,
+    document_recall: documentRecall,
+    document_f1: documentF1,
+    gold_span_count: (goldSpans || []).length,
+    retrieved_span_count: (retrievedSpans || []).length,
+  };
+}
+
+function hydrateRun(run) {
+  const examples = run.examples || [];
+  const rows = [];
+  for (const ex of examples) {
+    const goldSpans = ex.gold_spans || [];
+    for (const [method, result] of Object.entries(ex.methods || {})) {
+      if (result.document_f1 == null || result.document_precision == null || result.document_recall == null) {
+        Object.assign(result, computeDocumentMetrics(goldSpans, result.retrieved_spans || []));
+      }
+      rows.push({
+        method,
+        precision: Number(result.precision) || 0,
+        recall: Number(result.recall) || 0,
+        f1: Number(result.f1) || 0,
+        document_precision: Number(result.document_precision) || 0,
+        document_recall: Number(result.document_recall) || 0,
+        document_f1: Number(result.document_f1) || 0,
+        estimated_cost_usd: Number(result.estimated_cost_usd) || 0,
+        wall_clock_seconds: Number(result.wall_clock_seconds) || 0,
+        input_tokens: Number(result.input_tokens) || 0,
+        output_tokens: Number(result.output_tokens) || 0,
+        error: result.error || "",
+      });
+    }
+  }
+
+  const agg = run.aggregates || {};
+  const byMethod = {};
+  for (const row of rows) {
+    const bucket = byMethod[row.method] ||= {
+      n: 0,
+      mean_precision: 0,
+      mean_recall: 0,
+      mean_f1: 0,
+      mean_document_precision: 0,
+      mean_document_recall: 0,
+      mean_document_f1: 0,
+      query_cost_usd: 0,
+      query_answer_cost_usd: 0,
+      setup_cost_usd: Number((((run.setup_costs || {})[row.method] || {}).estimated_cost_usd)) || 0,
+      total_cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      mean_wall_clock_seconds: 0,
+      errors: 0,
+    };
+    bucket.n += 1;
+    bucket.mean_precision += row.precision;
+    bucket.mean_recall += row.recall;
+    bucket.mean_f1 += row.f1;
+    bucket.mean_document_precision += row.document_precision;
+    bucket.mean_document_recall += row.document_recall;
+    bucket.mean_document_f1 += row.document_f1;
+    bucket.query_cost_usd += row.estimated_cost_usd;
+    bucket.query_answer_cost_usd = bucket.query_cost_usd;
+    bucket.input_tokens += row.input_tokens;
+    bucket.output_tokens += row.output_tokens;
+    bucket.mean_wall_clock_seconds += row.wall_clock_seconds;
+    bucket.errors += row.error ? 1 : 0;
+  }
+
+  let totalRealizedCostUsd = 0;
+  for (const bucket of Object.values(byMethod)) {
+    const n = Math.max(1, bucket.n);
+    bucket.mean_precision /= n;
+    bucket.mean_recall /= n;
+    bucket.mean_f1 /= n;
+    bucket.mean_document_precision /= n;
+    bucket.mean_document_recall /= n;
+    bucket.mean_document_f1 /= n;
+    bucket.mean_wall_clock_seconds /= n;
+    bucket.total_cost_usd = bucket.query_cost_usd + bucket.setup_cost_usd;
+    totalRealizedCostUsd += bucket.total_cost_usd;
+  }
+
+  run.aggregates = {
+    ...agg,
+    n_rows: rows.length,
+    primary_metric: "document_f1",
+    primary_metric_family: "document",
+    total_realized_cost_usd: totalRealizedCostUsd,
+    by_method: {
+      ...(agg.by_method || {}),
+      ...byMethod,
+    },
+  };
+  return run;
+}
+
 function init() {
+  for (let i = 0; i < RUNS.length; i += 1) RUNS[i] = hydrateRun(RUNS[i]);
   const select = $("#run-select");
   select.innerHTML = RUNS.map((run, idx) => `<option value="${idx}">${esc(run.run_id)}</option>`).join("");
   select.onchange = () => renderRun(Number(select.value));
@@ -150,7 +326,10 @@ function renderOverview() {
     <tr>
       <td><span class="badge">${esc(method)}</span></td>
       <td>${esc(s.n)}</td>
-      <td><span class="badge ${f1Class(s.mean_f1)}">${fmt(s.mean_f1)}</span></td>
+      <td><span class="badge ${f1Class(s.mean_document_f1)}">${fmt(s.mean_document_f1)}</span></td>
+      <td>${fmt(s.mean_document_precision)}</td>
+      <td>${fmt(s.mean_document_recall)}</td>
+      <td>${fmt(s.mean_f1)}</td>
       <td>${fmt(s.mean_precision)}</td>
       <td>${fmt(s.mean_recall)}</td>
       <td>${money(s.total_cost_usd)}</td>
@@ -167,8 +346,9 @@ function renderOverview() {
     </div>
     <div class="panel">
       <h2>Method Aggregates</h2>
-      <table><thead><tr><th>Method</th><th>n</th><th>F1</th><th>Precision</th><th>Recall</th><th>Total cost</th><th>Setup cost</th><th>Latency</th><th>Errors</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="9" class="empty">No metrics</td></tr>`}</tbody></table>
+      <p class="meta">Primary scores are document-level retrieval metrics from unique matched <code>document_id</code> values. Span overlap and generated answers are retained only for diagnostics.</p>
+      <table><thead><tr><th>Method</th><th>n</th><th>Doc F1</th><th>Doc P</th><th>Doc R</th><th>Span F1</th><th>Span P</th><th>Span R</th><th>Total cost</th><th>Setup cost</th><th>Latency</th><th>Errors</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="12" class="empty">No metrics</td></tr>`}</tbody></table>
     </div>`;
 }
 
@@ -176,7 +356,7 @@ function renderExamples() {
   const examples = currentRun.examples || [];
   const list = examples.map((ex, idx) => {
     const badges = Object.entries(ex.methods || {}).map(([m, r]) =>
-      `<span class="badge ${f1Class(r.f1)}">${esc(m)} ${fmt(r.f1, 2)}</span>`).join("");
+      `<span class="badge ${f1Class(r.document_f1)}">${esc(m)} Doc F1 ${fmt(r.document_f1, 2)}</span>`).join("");
     return `<div class="ex ${idx === currentExample ? "active" : ""}" data-idx="${idx}">
       <div class="ex-id">${esc(ex.benchmark)} / ${esc(ex.id)}</div>
       <div class="ex-q">${esc((ex.query || "").slice(0, 160))}${(ex.query || "").length > 160 ? "..." : ""}</div>
@@ -206,7 +386,7 @@ function renderExampleDetail(ex) {
       <div class="query">${esc(ex.query)}</div>
     </div>
     <div class="panel">
-      <h2>Golden Answer Spans</h2>
+      <h2>Gold Expected Retrieved Spans</h2>
       ${gold || `<div class="empty">No gold spans</div>`}
     </div>
     <div class="grid2">${methods}</div>`;
@@ -214,19 +394,27 @@ function renderExampleDetail(ex) {
 
 function methodPanel(method, result) {
   const spans = (result.retrieved_spans || []).map(spanBlock).join("");
+  const answerBlock = result.answer
+    ? `<h2>Generated Answer Diagnostic</h2><div class="answer">${esc(result.answer)}</div>`
+    : "";
   return `<div class="panel method ${esc(method)}">
-    <h3><span class="badge">${esc(method)}</span> <span class="badge ${f1Class(result.f1)}">F1 ${fmt(result.f1)}</span></h3>
+    <h3><span class="badge">${esc(method)}</span> <span class="badge ${f1Class(result.document_f1)}">Doc F1 ${fmt(result.document_f1)}</span></h3>
     <div class="badges">
-      <span class="badge">P ${fmt(result.precision)}</span>
-      <span class="badge">R ${fmt(result.recall)}</span>
+      <span class="badge">Doc P ${fmt(result.document_precision)}</span>
+      <span class="badge">Doc R ${fmt(result.document_recall)}</span>
+      <span class="badge">docs ${esc(result.matched_document_count || 0)}/${esc(result.retrieved_document_count || 0)}</span>
+      <span class="badge">spans ${esc(result.retrieved_span_count || (result.retrieved_spans || []).length)}</span>
+      <span class="badge">Span F1 ${fmt(result.f1)}</span>
+      <span class="badge">Span P ${fmt(result.precision)}</span>
+      <span class="badge">Span R ${fmt(result.recall)}</span>
       <span class="badge">${money(result.estimated_cost_usd)}</span>
       <span class="badge">${fmt(result.wall_clock_seconds, 1)}s</span>
       <span class="badge">in ${esc(result.input_tokens || 0)}</span>
       <span class="badge">out ${esc(result.output_tokens || 0)}</span>
     </div>
     ${result.error ? `<p class="err">${esc(result.error)}</p>` : ""}
-    <div class="answer">${esc(result.answer || "No answer recorded.")}</div>
-    <h2>Retrieved Documents</h2>
+    ${answerBlock}
+    <h2>Retrieved Spans</h2>
     ${spans || `<div class="empty">No retrieved spans</div>`}
   </div>`;
 }
@@ -273,4 +461,3 @@ init();
 </body>
 </html>
 """
-

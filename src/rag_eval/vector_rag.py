@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from .text_splitters import make_chunks
 from .types import Chunk, Document, RetrievedSpan, RetrievalOutput
@@ -113,7 +114,12 @@ class VectorRAG:
 
     def _build_chunks(self, documents: list[Document]) -> list[Chunk]:
         chunks: list[Chunk] = []
-        for document in documents:
+        for document in tqdm(
+            documents,
+            desc="Vector chunking",
+            unit="doc",
+            disable=len(documents) <= 1,
+        ):
             chunks.extend(
                 make_chunks(
                     document,

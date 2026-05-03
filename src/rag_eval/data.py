@@ -86,11 +86,20 @@ class LegalBenchRAGLoader:
             raise ValueError("corpus_scope must be 'sampled' or 'all'")
 
         if corpus_scope == "all":
-            doc_ids = sorted(
-                str(path.relative_to(self.corpus_dir))
-                for path in self.corpus_dir.rglob("*")
-                if path.is_file()
-            )
+            doc_ids = {
+                span.document_id for example in examples for span in example.gold_spans
+            }
+            benchmarks = sorted({example.benchmark for example in examples})
+            for benchmark in benchmarks:
+                benchmark_dir = self.corpus_dir / benchmark
+                if not benchmark_dir.exists():
+                    continue
+                doc_ids.update(
+                    str(path.relative_to(self.corpus_dir))
+                    for path in benchmark_dir.rglob("*")
+                    if path.is_file()
+                )
+            doc_ids = sorted(doc_ids)
         else:
             doc_ids = sorted(
                 {
