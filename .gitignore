@@ -5,10 +5,10 @@ __pycache__/
 .cache/
 *.egg-info/
 data/
-results/*/
-results/*.json
-results/*.jsonl
-results/*.csv
+# results/*/
+# results/*.json
+# results/*.jsonl
+# results/*.csv
 
 AGENTS.md
 prompt.md
