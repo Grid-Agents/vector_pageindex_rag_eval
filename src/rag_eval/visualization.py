@@ -298,8 +298,8 @@ function hydrateRun(run) {
   run.aggregates = {
     ...agg,
     n_rows: rows.length,
-    primary_metric: "document_f1",
-    primary_metric_family: "document",
+    primary_metric: "f1",
+    primary_metric_family: "span",
     total_realized_cost_usd: totalRealizedCostUsd,
     by_method: {
       ...(agg.by_method || {}),
@@ -347,12 +347,12 @@ function renderOverview() {
     <tr>
       <td><span class="badge">${esc(method)}</span></td>
       <td>${esc(s.n)}</td>
-      <td><span class="badge ${f1Class(s.mean_document_f1)}">${fmt(s.mean_document_f1)}</span></td>
-      <td>${fmt(s.mean_document_precision)}</td>
-      <td>${fmt(s.mean_document_recall)}</td>
-      <td>${fmt(s.mean_f1)}</td>
+      <td><span class="badge ${f1Class(s.mean_f1)}">${fmt(s.mean_f1)}</span></td>
       <td>${fmt(s.mean_precision)}</td>
       <td>${fmt(s.mean_recall)}</td>
+      <td>${fmt(s.mean_document_f1)}</td>
+      <td>${fmt(s.mean_document_precision)}</td>
+      <td>${fmt(s.mean_document_recall)}</td>
       <td>${money(s.total_cost_usd)}</td>
       <td>${money(s.setup_cost_usd)}</td>
       <td>${fmt(s.mean_wall_clock_seconds, 1)}s</td>
@@ -367,8 +367,8 @@ function renderOverview() {
     </div>
     <div class="panel">
       <h2>Method Aggregates</h2>
-      <p class="meta">Primary scores are document-level retrieval metrics from unique matched <code>document_id</code> values. Span overlap and generated answers are retained only for diagnostics.</p>
-      <table><thead><tr><th>Method</th><th>n</th><th>Doc F1</th><th>Doc P</th><th>Doc R</th><th>Span F1</th><th>Span P</th><th>Span R</th><th>Total cost</th><th>Setup cost</th><th>Latency</th><th>Errors</th></tr></thead>
+      <p class="meta">Primary scores are span/token-level overlap metrics. Document-level retrieval metrics from matched <code>document_id</code> values are retained as secondary diagnostics.</p>
+      <table><thead><tr><th>Method</th><th>n</th><th>Span F1</th><th>Span P</th><th>Span R</th><th>Doc F1</th><th>Doc P</th><th>Doc R</th><th>Total cost</th><th>Setup cost</th><th>Latency</th><th>Errors</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="12" class="empty">No metrics</td></tr>`}</tbody></table>
     </div>`;
 }
@@ -377,7 +377,7 @@ function renderExamples() {
   const examples = currentRun.examples || [];
   const list = examples.map((ex, idx) => {
     const badges = Object.entries(ex.methods || {}).map(([m, r]) =>
-      `<span class="badge ${f1Class(r.document_f1)}">${esc(m)} Doc F1 ${fmt(r.document_f1, 2)}</span>`).join("");
+      `<span class="badge ${f1Class(r.f1)}">${esc(m)} Span F1 ${fmt(r.f1, 2)}</span>`).join("");
     return `<div class="ex ${idx === currentExample ? "active" : ""}" data-idx="${idx}">
       <div class="ex-id">${esc(ex.benchmark)} / ${esc(ex.id)}</div>
       <div class="ex-q">${esc((ex.query || "").slice(0, 160))}${(ex.query || "").length > 160 ? "..." : ""}</div>
@@ -419,15 +419,17 @@ function methodPanel(method, result) {
     ? `<h2>Generated Answer Diagnostic</h2><div class="answer">${esc(result.answer)}</div>`
     : "";
   return `<div class="panel method ${esc(method)}">
-    <h3><span class="badge">${esc(method)}</span> <span class="badge ${f1Class(result.document_f1)}">Doc F1 ${fmt(result.document_f1)}</span></h3>
+    <h3><span class="badge">${esc(method)}</span> <span class="badge ${f1Class(result.f1)}">Span F1 ${fmt(result.f1)}</span></h3>
     <div class="badges">
+      <span class="badge">Span P ${fmt(result.precision)}</span>
+      <span class="badge">Span R ${fmt(result.recall)}</span>
+      <span class="badge">overlap ${esc(result.overlap_chars || 0)}/${esc(result.gold_chars || 0)}</span>
+      <span class="badge">retrieved ${esc(result.retrieved_chars || 0)} chars</span>
+      <span class="badge">Doc F1 ${fmt(result.document_f1)}</span>
       <span class="badge">Doc P ${fmt(result.document_precision)}</span>
       <span class="badge">Doc R ${fmt(result.document_recall)}</span>
       <span class="badge">docs ${esc(result.matched_document_count || 0)}/${esc(result.retrieved_document_count || 0)}</span>
       <span class="badge">spans ${esc(result.retrieved_span_count || (result.retrieved_spans || []).length)}</span>
-      <span class="badge">Span F1 ${fmt(result.f1)}</span>
-      <span class="badge">Span P ${fmt(result.precision)}</span>
-      <span class="badge">Span R ${fmt(result.recall)}</span>
       <span class="badge">${money(result.estimated_cost_usd)}</span>
       <span class="badge">${fmt(result.wall_clock_seconds, 1)}s</span>
       <span class="badge">in ${esc(result.input_tokens || 0)}</span>

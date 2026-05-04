@@ -293,8 +293,8 @@ def _aggregate(
         total += bucket["total_cost_usd"]
     return {
         "n_rows": len(rows),
-        "primary_metric": "document_f1",
-        "primary_metric_family": "document",
+        "primary_metric": "f1",
+        "primary_metric_family": "span",
         "total_realized_cost_usd": total,
         "by_method": by_method,
     }
