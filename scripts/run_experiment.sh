@@ -13,6 +13,7 @@ RUN_ID=""
 RETRIEVAL_ONLY="false"
 ANSWER_WITH_LLM="false"
 FORCE_REINDEX="false"
+RECORD_REASONING_TRAJECTORY="true"
 EXTRA_ARGS=()
 
 usage() {
@@ -22,7 +23,7 @@ Usage: scripts/run_experiment.sh [options] [-- extra run_experiment.py args]
 Options:
   --benchmark NAME          Benchmark to run. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
-  --n N                     Number of examples. Default: 5.
+  --n N                     Number of examples. Default: 10.
   --methods LIST            Comma-separated methods. Default: vector,pageindex.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, or fixed.
@@ -30,6 +31,10 @@ Options:
   --rerank-top-k N          Reranker output top-k.
   --answer-with-llm         Generate qualitative answers after retrieval. Saved as diagnostics only.
   --retrieval-only          Skip answer generation. Default and recommended for document metrics.
+  --record-reasoning-trajectory
+                            Save PageIndex document and ToC node selection traces. Default.
+  --no-record-reasoning-trajectory
+                            Disable PageIndex reasoning trace recording.
   --force-reindex           Rebuild PageIndex ToC cache.
   --run-id ID               Custom run id.
   --config PATH             Config file. Default: configs/default.yaml.
@@ -73,6 +78,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --answer-with-llm)
       ANSWER_WITH_LLM="true"
+      shift
+      ;;
+    --record-reasoning-trajectory)
+      RECORD_REASONING_TRAJECTORY="true"
+      shift
+      ;;
+    --no-record-reasoning-trajectory)
+      RECORD_REASONING_TRAJECTORY="false"
       shift
       ;;
     --force-reindex)
@@ -129,6 +142,11 @@ if [[ "$RETRIEVAL_ONLY" == "true" ]]; then
 fi
 if [[ "$ANSWER_WITH_LLM" == "true" ]]; then
   cmd+=(--answer-with-llm)
+fi
+if [[ "$RECORD_REASONING_TRAJECTORY" == "true" ]]; then
+  cmd+=(--record-reasoning-trajectory)
+else
+  cmd+=(--no-record-reasoning-trajectory)
 fi
 if [[ "$FORCE_REINDEX" == "true" ]]; then
   cmd+=(--force-reindex)

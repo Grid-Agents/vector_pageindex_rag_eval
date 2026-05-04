@@ -197,6 +197,7 @@ def _run_method(
         "answer": answer,
         "retrieved_spans": [span.to_dict() for span in retrieval.spans],
         "retrieval_metadata": retrieval.metadata,
+        "reasoning_trajectory": retrieval.metadata.get("reasoning_trajectory"),
         "wall_clock_seconds": wall_clock,
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,

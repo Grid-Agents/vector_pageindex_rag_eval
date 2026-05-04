@@ -318,6 +318,8 @@ Returned PageIndex spans include metadata:
 
 Broad selected nodes can cover too much text, so each returned node span is capped by `pageindex.max_retrieved_chars_per_node`. The span always starts at the selected node's `start_char`; only `end_char` may be shortened by the cap.
 
+When `pageindex.record_reasoning_trajectory` is true, each PageIndex result also stores a `reasoning_trajectory` object. The trace records the document shortlist response, accepted document selections, each staged ToC child-selection step, fallback decisions, and the final node ids that became retrieved spans. This is an observable decision path from the model's JSON rationales and the tree nodes shown in each prompt, not hidden chain-of-thought.
+
 Default PageIndex config:
 
 ```yaml
@@ -336,6 +338,9 @@ pageindex:
   max_tree_chars: 24000
   selected_nodes: 5
   max_retrieved_chars_per_node: 5000
+  record_reasoning_trajectory: true
+  reasoning_max_catalog_chars: 12000
+  reasoning_max_node_summary_chars: 320
 ```
 
 ## Key Differences

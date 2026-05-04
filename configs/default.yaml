@@ -42,10 +42,14 @@ pageindex:
   max_tokens_per_node: 20000
   node_summary_max_tokens: 220
   root_summary_max_tokens: 260
-  selected_documents: 3
+  selected_documents: 5
   max_tree_chars: 24000
-  selected_nodes: 5
+  selected_nodes: 10
   max_retrieved_chars_per_node: 5000
+  record_reasoning_trajectory: true
+  reasoning_max_catalog_chars: 12000
+  reasoning_max_node_summary_chars: 320
+  # TODO: Use their official repo to implement and see the performance difference
 
 run:
   results_dir: results

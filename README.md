@@ -104,7 +104,7 @@ results/<run_id>/summary.csv
 results/visualization.html
 ```
 
-Open `results/visualization.html` to inspect run-level retrieval metrics, per-question gold snippets, retrieved spans, and the PageIndex ToC tree tab.
+Open `results/visualization.html` to inspect run-level retrieval metrics, per-question gold snippets, retrieved spans, PageIndex reasoning traces, and the PageIndex ToC tree tab.
 
 ## Config
 
@@ -130,6 +130,7 @@ PageIndex settings:
 - `selected_documents`: max documents shortlisted before per-document node selection
 - `selected_nodes`: max final page nodes selected during tree traversal
 - `max_retrieved_chars_per_node`: retrieval span cap for returned page nodes
+- `record_reasoning_trajectory`: save the PageIndex document-selection and ToC tree-walk decision path in `run.json`
 
 ## Metrics
 

@@ -70,17 +70,53 @@ class PageIndexRAG:
         metadata: dict[str, Any] = {}
         selected_nodes = max(1, int(self.cfg.get("selected_nodes", 5)))
         error_parts: list[str] = []
+        record_reasoning = self._record_reasoning_trajectory()
+        reasoning_trajectory: dict[str, Any] | None = None
+        if record_reasoning:
+            reasoning_trajectory = {
+                "query": query,
+                "document_selection": {
+                    "source": "",
+                    "candidate_document_count": len(self.trees),
+                    "raw_response": {},
+                    "requested_selections": [],
+                    "accepted_selections": [],
+                },
+                "document_walks": [],
+                "retrieved_nodes": [],
+                "errors": error_parts,
+            }
 
         document_selections = []
         try:
             document_selections, parsed = self._select_documents(query)
             usage.add(parsed["usage"])
             metadata["document_selection_raw"] = parsed["raw"]
+            if reasoning_trajectory is not None:
+                reasoning_trajectory["document_selection"].update(
+                    {
+                        "source": "llm",
+                        "catalog_char_count": parsed.get("catalog_char_count", 0),
+                        "catalog_truncated": parsed.get("catalog_truncated", False),
+                        "catalog_preview": parsed.get("catalog_preview", ""),
+                        "raw_response": parsed["raw"],
+                        "requested_selections": document_selections,
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             document_selections = self._keyword_document_fallback(query)
-            error_parts.append(
+            error_text = (
                 f"pageindex_document_selection_error: {type(exc).__name__}: {exc}"
             )
+            error_parts.append(error_text)
+            if reasoning_trajectory is not None:
+                reasoning_trajectory["document_selection"].update(
+                    {
+                        "source": "keyword_fallback",
+                        "error": error_text,
+                        "requested_selections": document_selections,
+                    }
+                )
             metadata["document_selection_raw"] = {
                 "documents": document_selections,
                 "fallback": True,
@@ -91,9 +127,19 @@ class PageIndexRAG:
             if document_selections:
                 error_parts.append("pageindex_document_selection_empty")
                 metadata["document_selection_fallback"] = document_selections
+                if reasoning_trajectory is not None:
+                    reasoning_trajectory["document_selection"].update(
+                        {
+                            "source": "keyword_fallback",
+                            "fallback_reason": "llm_returned_no_documents",
+                            "fallback_selections": document_selections,
+                        }
+                    )
 
         normalized_document_selections = []
         for item in document_selections:
+            if not isinstance(item, dict):
+                continue
             doc_id = str(item.get("document_id", ""))
             if doc_id not in self.trees:
                 continue
@@ -112,7 +158,19 @@ class PageIndexRAG:
             if normalized_document_selections:
                 error_parts.append("pageindex_document_selection_invalid")
                 metadata["document_selection_fallback"] = fallback_documents
+                if reasoning_trajectory is not None:
+                    reasoning_trajectory["document_selection"].update(
+                        {
+                            "source": "keyword_fallback",
+                            "fallback_reason": "llm_selected_unknown_documents",
+                            "fallback_selections": fallback_documents,
+                        }
+                    )
         metadata["document_selections"] = normalized_document_selections
+        if reasoning_trajectory is not None:
+            reasoning_trajectory["document_selection"][
+                "accepted_selections"
+            ] = normalized_document_selections
 
         spans: list[RetrievedSpan] = []
         node_metadata: dict[str, Any] = {}
@@ -123,28 +181,69 @@ class PageIndexRAG:
         ]:
             doc_id = document_item["document_id"]
             page_selections = []
+            walk_record: dict[str, Any] | None = None
+            if reasoning_trajectory is not None:
+                walk_record = {
+                    "document_id": doc_id,
+                    "document_reason": document_item.get("reason", ""),
+                    "source": "",
+                    "steps": [],
+                    "final_selections": [],
+                }
             try:
                 page_selections, parsed = self._select_nodes_for_document(query, doc_id)
                 usage.add(parsed["usage"])
                 node_metadata[doc_id] = parsed["raw"]
+                if walk_record is not None:
+                    walk_record.update(
+                        {
+                            "source": "llm_tree_walk",
+                            "steps": parsed["raw"].get("trace", []),
+                            "final_selections": page_selections,
+                        }
+                    )
             except Exception as exc:  # noqa: BLE001
                 page_selections = self._keyword_node_fallback(query, doc_id)
-                error_parts.append(
+                error_text = (
                     f"pageindex_node_selection_error[{doc_id}]: "
                     f"{type(exc).__name__}: {exc}"
                 )
+                error_parts.append(error_text)
                 node_metadata[doc_id] = {
                     "selections": page_selections,
                     "fallback": True,
                 }
+                if walk_record is not None:
+                    walk_record.update(
+                        {
+                            "source": "keyword_fallback",
+                            "error": error_text,
+                            "final_selections": page_selections,
+                        }
+                    )
 
             if not page_selections:
                 page_selections = self._keyword_node_fallback(query, doc_id)
                 if page_selections:
                     error_parts.append(f"pageindex_node_selection_empty[{doc_id}]")
                     node_metadata[f"{doc_id}__fallback"] = page_selections
+                    if walk_record is not None:
+                        walk_record.update(
+                            {
+                                "source": "keyword_fallback",
+                                "fallback_reason": "llm_returned_no_nodes",
+                                "final_selections": page_selections,
+                            }
+                        )
+            elif walk_record is not None:
+                walk_record["final_selections"] = page_selections
+
+            if walk_record is not None:
+                reasoning_trajectory["document_walks"].append(walk_record)
 
             for item in page_selections:
+                if not isinstance(item, dict):
+                    continue
                 node_id = str(item.get("node_id", ""))
                 if not node_id or node_id in seen_node_ids or node_id not in self.node_index:
                     continue
@@ -159,6 +258,20 @@ class PageIndexRAG:
                 if max_chars > 0:
                     end = min(end, start + max_chars)
                 rank += 1
+                retrieved_node = {
+                    "document_id": doc_id,
+                    "document_reason": document_item.get("reason", ""),
+                    "node_id": node_id,
+                    "node_title": node.get("title", ""),
+                    "reason": item.get("reason", ""),
+                    "unit_start": node.get("unit_start"),
+                    "unit_end": node.get("unit_end"),
+                    "start_char": start,
+                    "end_char": end,
+                    "score": 1.0 / rank,
+                }
+                if reasoning_trajectory is not None:
+                    reasoning_trajectory["retrieved_nodes"].append(retrieved_node)
                 spans.append(
                     RetrievedSpan(
                         document_id=doc_id,
@@ -187,6 +300,9 @@ class PageIndexRAG:
             "documents": normalized_document_selections,
             "nodes_by_document": node_metadata,
         }
+        if reasoning_trajectory is not None:
+            reasoning_trajectory["errors"] = error_parts
+            metadata["reasoning_trajectory"] = reasoning_trajectory
         return RetrievalOutput(
             spans=spans,
             usage=usage,
@@ -678,9 +794,8 @@ class PageIndexRAG:
             self.node_index[node["node_id"]] = (doc_id, node)
 
     def _select_documents(self, query: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
-        catalog_text = self._format_document_catalog(
-            max_chars=int(self.cfg.get("max_document_catalog_chars", 120000))
-        )
+        max_catalog_chars = int(self.cfg.get("max_document_catalog_chars", 120000))
+        catalog_text = self._format_document_catalog(max_chars=max_catalog_chars)
         system = (
             "You are a PageIndex retrieval agent. Select which documents are most "
             "likely to contain the answer to the legal query."
@@ -694,7 +809,20 @@ class PageIndexRAG:
         )
         response = self.llm.complete(system=system, user=user, max_tokens=700)
         parsed = extract_json_object(response.text)
-        return parsed.get("documents", []), {"raw": parsed, "usage": response.usage}
+        documents = parsed.get("documents", [])
+        if not isinstance(documents, list):
+            documents = []
+        return documents, {
+            "raw": parsed,
+            "usage": response.usage,
+            "candidate_document_count": len(self.trees),
+            "catalog_char_count": len(catalog_text),
+            "catalog_truncated": catalog_text.endswith("\n...TRUNCATED..."),
+            "catalog_preview": self._reasoning_preview(
+                catalog_text,
+                int(self.cfg.get("reasoning_max_catalog_chars", 12000)),
+            ),
+        }
 
     def _select_nodes_for_document(
         self, query: str, doc_id: str
@@ -728,6 +856,7 @@ class PageIndexRAG:
         if not children:
             return [{"node_id": str(node["node_id"]), "reason": "selected page node"}]
 
+        trace_start = len(trace)
         raw_selections = self._select_child_nodes(
             query=query,
             doc_id=doc_id,
@@ -737,17 +866,31 @@ class PageIndexRAG:
             trace=trace,
             budget=budget,
         )
+        trace_entry = trace[-1] if len(trace) > trace_start else None
         child_by_id = {str(child["node_id"]): child for child in children}
         normalized = []
+        invalid_selection_ids = []
         for item in raw_selections:
+            if not isinstance(item, dict):
+                continue
             child = child_by_id.get(str(item.get("node_id", "")))
             if child is None:
+                invalid_selection_ids.append(str(item.get("node_id", "")))
                 continue
             normalized.append(
                 {"node_id": str(child["node_id"]), "reason": str(item.get("reason", ""))}
             )
         if not normalized:
             normalized = self._keyword_child_fallback(query, children, budget)
+            if trace_entry is not None:
+                trace_entry["selection_source"] = "keyword_fallback"
+                trace_entry["fallback_reason"] = "llm_selected_no_valid_children"
+                trace_entry["accepted_selections"] = normalized
+        elif trace_entry is not None:
+            trace_entry["selection_source"] = "llm"
+            trace_entry["accepted_selections"] = normalized
+        if trace_entry is not None and invalid_selection_ids:
+            trace_entry["invalid_selection_ids"] = invalid_selection_ids
 
         results: list[dict[str, str]] = []
         for item in normalized:
@@ -802,16 +945,27 @@ class PageIndexRAG:
         response = self.llm.complete(system=system, user=user, max_tokens=700)
         usage.add(response.usage)
         parsed = extract_json_object(response.text)
+        selections = parsed.get("selections", [])
+        if not isinstance(selections, list):
+            selections = []
         trace.append(
             {
-                "node_id": node.get("node_id"),
-                "unit_start": node.get("unit_start"),
-                "unit_end": node.get("unit_end"),
-                "child_count": len(children),
+                "step": len(trace) + 1,
+                "document_id": doc_id,
+                "current_node": self._trace_node(node),
+                "candidate_child_count": len(children),
+                "candidate_children": [
+                    self._trace_node(child) for child in children
+                ],
+                "prompt_child_list_truncated": child_text.endswith(
+                    "\n...TRUNCATED..."
+                ),
+                "raw_response": parsed,
                 "selection_raw": parsed,
+                "llm_selections": selections,
             }
         )
-        return parsed.get("selections", [])
+        return selections
 
     def _format_children_for_selection(
         self, children: list[dict[str, Any]], *, max_chars: int
@@ -857,6 +1011,27 @@ class PageIndexRAG:
         if len(text) <= max_chars:
             return text
         return text[:max_chars] + "\n...TRUNCATED..."
+
+    def _trace_node(self, node: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "node_id": str(node.get("node_id", "")),
+            "title": str(node.get("title", "")),
+            "summary": self._reasoning_preview(
+                str(node.get("summary", "")),
+                int(self.cfg.get("reasoning_max_node_summary_chars", 320)),
+            ),
+            "node_kind": str(node.get("node_kind", "")),
+            "unit_start": node.get("unit_start"),
+            "unit_end": node.get("unit_end"),
+            "start_char": node.get("start_char"),
+            "end_char": node.get("end_char"),
+            "child_count": len(node.get("children", []) or []),
+        }
+
+    def _reasoning_preview(self, text: str, limit: int) -> str:
+        if limit <= 0 or len(text) <= limit:
+            return text
+        return text[:limit] + "\n...TRUNCATED..."
 
     def _keyword_document_fallback(self, query: str) -> list[dict[str, str]]:
         terms = {term.lower() for term in query.split() if len(term) > 3}
@@ -965,6 +1140,9 @@ class PageIndexRAG:
 
     def _root_summary_max_tokens(self) -> int:
         return max(self._node_summary_max_tokens(), int(self.cfg.get("root_summary_max_tokens", 260)))
+
+    def _record_reasoning_trajectory(self) -> bool:
+        return bool(self.cfg.get("record_reasoning_trajectory", True))
 
 
 def _flatten_tree(node: dict[str, Any]) -> list[dict[str, Any]]:

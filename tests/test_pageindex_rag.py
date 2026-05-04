@@ -68,6 +68,16 @@ def test_pageindex_selects_documents_then_nodes(tmp_path):
     assert result.metadata["document_selections"] == [
         {"document_id": "cuad/license.txt", "reason": "license query"}
     ]
+    trajectory = result.metadata["reasoning_trajectory"]
+    assert trajectory["document_selection"]["source"] == "llm"
+    assert trajectory["document_selection"]["accepted_selections"] == [
+        {"document_id": "cuad/license.txt", "reason": "license query"}
+    ]
+    assert trajectory["document_walks"][0]["document_id"] == "cuad/license.txt"
+    assert trajectory["document_walks"][0]["steps"][0]["accepted_selections"] == [
+        {"node_id": leaf_id, "reason": "contains grant language"}
+    ]
+    assert trajectory["retrieved_nodes"][0]["node_id"] == leaf_id
 
 
 def test_pageindex_builds_virtual_page_leaves(tmp_path):

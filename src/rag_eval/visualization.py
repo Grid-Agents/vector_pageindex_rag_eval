@@ -78,10 +78,24 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .node-title { font-weight: 600; }
 .node-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #666; font-size: 11px; }
 .node-summary { color: #555; font-size: 12px; margin-top: 2px; }
+.reasoning-layout { display: grid; grid-template-columns: 360px 1fr; gap: 14px; }
+.reasoning-list { max-height: calc(100vh - 160px); overflow: auto; }
+.reasoning-item { padding: 9px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+.reasoning-item:hover, .reasoning-item.active { background: #f0ecff; }
+.trace-section { margin-bottom: 12px; }
+.trace-step { border: 1px solid #deded8; border-radius: 6px; padding: 10px; margin-top: 8px; }
+.trace-title { font-weight: 650; margin-bottom: 5px; }
+.candidate-list { display: grid; gap: 6px; margin-top: 8px; }
+.candidate { border: 1px solid #e5e5df; border-radius: 6px; padding: 7px 8px; background: #fafafa; }
+.candidate.selected { border-color: #8a5cf6; background: #f5f1ff; }
+.reason { color: #444; font-size: 12px; margin-top: 3px; }
+details { margin-top: 8px; }
+summary { cursor: pointer; color: #555; font-size: 12px; }
+pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 8px; max-height: 280px; overflow: auto; font-size: 12px; }
 .hidden { display: none; }
 .empty { color: #888; font-style: italic; padding: 12px; }
 @media (max-width: 900px) {
-  .cards, .grid2, .layout, .toc-layout { grid-template-columns: 1fr; }
+  .cards, .grid2, .layout, .toc-layout, .reasoning-layout { grid-template-columns: 1fr; }
   .tabs { margin-left: 0; }
   .topbar { flex-wrap: wrap; }
 }
@@ -95,12 +109,14 @@ th { color: #555; font-weight: 600; background: #fafafa; }
   <div class="tabs">
     <button class="tab active" data-tab="overview">Overview</button>
     <button class="tab" data-tab="examples">Examples</button>
+    <button class="tab" data-tab="reasoning">PageIndex Reasoning</button>
     <button class="tab" data-tab="toc">PageIndex ToC</button>
   </div>
 </div>
 <main class="page">
   <section id="overview"></section>
   <section id="examples" class="hidden"></section>
+  <section id="reasoning" class="hidden"></section>
   <section id="toc" class="hidden"></section>
 </main>
 <script>
@@ -114,6 +130,7 @@ const f1Class = value => value >= .8 ? "good" : value >= .4 ? "mid" : "bad";
 
 let currentRun = null;
 let currentExample = 0;
+let currentReasoningExample = 0;
 let currentTocDoc = 0;
 
 function mergeRanges(ranges) {
@@ -300,7 +317,7 @@ function init() {
     btn.onclick = () => {
       document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
       btn.classList.add("active");
-      ["overview", "examples", "toc"].forEach(id => $("#" + id).classList.add("hidden"));
+      ["overview", "examples", "reasoning", "toc"].forEach(id => $("#" + id).classList.add("hidden"));
       $("#" + btn.dataset.tab).classList.remove("hidden");
     };
   });
@@ -311,17 +328,20 @@ function init() {
 function renderRun(idx) {
   currentRun = RUNS[idx];
   currentExample = 0;
+  currentReasoningExample = 0;
   currentTocDoc = 0;
   const cfg = currentRun.config || {};
   const runCfg = cfg.run || {};
   $("#run-meta").innerHTML = `${esc(currentRun.run_dir || "")} · n=${esc(runCfg.n || "?")} · methods=${esc((runCfg.methods || []).join(", "))}`;
   renderOverview();
   renderExamples();
+  renderReasoning();
   renderToc();
 }
 
 function renderOverview() {
   const agg = currentRun.aggregates || {};
+  const reasoningCount = pageindexReasoningItems().length;
   const rows = Object.entries(agg.by_method || {}).map(([method, s]) => `
     <tr>
       <td><span class="badge">${esc(method)}</span></td>
@@ -342,7 +362,7 @@ function renderOverview() {
       <div class="card"><div class="label">Rows</div><div class="value">${esc(agg.n_rows || 0)}</div></div>
       <div class="card"><div class="label">Total Cost</div><div class="value">${money(agg.total_realized_cost_usd)}</div></div>
       <div class="card"><div class="label">Examples</div><div class="value">${esc((currentRun.examples || []).length)}</div></div>
-      <div class="card"><div class="label">ToC Trees</div><div class="value">${esc((currentRun.toc_trees || []).length)}</div></div>
+      <div class="card"><div class="label">Reasoning Traces</div><div class="value">${esc(reasoningCount)}</div></div>
     </div>
     <div class="panel">
       <h2>Method Aggregates</h2>
@@ -428,6 +448,185 @@ function spanBlock(span) {
     </div>
     <div class="span-text">${esc(span.text)}</div>
   </div>`;
+}
+
+function pageindexReasoningItems() {
+  return (currentRun?.examples || []).map((ex, idx) => {
+    const result = (ex.methods || {}).pageindex;
+    const trajectory = result ? pageindexTrajectory(result) : null;
+    return { ex, idx, result, trajectory };
+  }).filter(item => item.trajectory);
+}
+
+function pageindexTrajectory(result) {
+  const metadata = result.retrieval_metadata || {};
+  if (result.reasoning_trajectory) return result.reasoning_trajectory;
+  if (metadata.reasoning_trajectory) return metadata.reasoning_trajectory;
+  if (!metadata.selection_raw && !metadata.document_selections) return null;
+  return {
+    query: "",
+    document_selection: {
+      source: "legacy_metadata",
+      raw_response: metadata.document_selection_raw || {},
+      accepted_selections: metadata.document_selections || [],
+    },
+    document_walks: Object.entries(metadata.node_selection_raw_by_document || {})
+      .filter(([_docId, raw]) => raw && typeof raw === "object" && !Array.isArray(raw))
+      .map(([docId, raw]) => ({
+        document_id: docId,
+        source: raw.fallback ? "keyword_fallback" : "legacy_metadata",
+        steps: raw.trace || [],
+        final_selections: raw.selections || [],
+      })),
+    retrieved_nodes: (result.retrieved_spans || []).map(span => ({
+      document_id: span.document_id,
+      node_id: (span.metadata || {}).node_id,
+      node_title: (span.metadata || {}).node_title,
+      reason: (span.metadata || {}).reason,
+      start_char: span.start_char,
+      end_char: span.end_char,
+      score: span.score,
+    })),
+    errors: result.error ? [result.error] : [],
+  };
+}
+
+function renderReasoning() {
+  const items = pageindexReasoningItems();
+  if (currentReasoningExample >= items.length) currentReasoningExample = 0;
+  const list = items.map((item, idx) => {
+    const selectedDocs = (((item.trajectory.document_selection || {}).accepted_selections) || []).length;
+    const retrievedNodes = (item.trajectory.retrieved_nodes || []).length;
+    return `<div class="reasoning-item ${idx === currentReasoningExample ? "active" : ""}" data-idx="${idx}">
+      <div class="ex-id">${esc(item.ex.benchmark)} / ${esc(item.ex.id)}</div>
+      <div class="ex-q">${esc((item.ex.query || "").slice(0, 160))}${(item.ex.query || "").length > 160 ? "..." : ""}</div>
+      <div class="badges">
+        <span class="badge">docs ${esc(selectedDocs)}</span>
+        <span class="badge">nodes ${esc(retrievedNodes)}</span>
+      </div>
+    </div>`;
+  }).join("");
+  $("#reasoning").innerHTML = `
+    <div class="reasoning-layout">
+      <div class="panel reasoning-list">${list || `<div class="empty">No PageIndex reasoning traces in this run.</div>`}</div>
+      <div id="reasoning-detail"></div>
+    </div>`;
+  document.querySelectorAll(".reasoning-item").forEach(el => {
+    el.onclick = () => {
+      currentReasoningExample = Number(el.dataset.idx);
+      renderReasoning();
+    };
+  });
+  if (items.length) renderReasoningDetail(items[currentReasoningExample]);
+}
+
+function renderReasoningDetail(item) {
+  const trajectory = item.trajectory || {};
+  const docSelection = trajectory.document_selection || {};
+  const selectedDocs = docSelection.accepted_selections || [];
+  const docBlocks = selectedDocs.map(doc => `
+    <div class="candidate selected">
+      <div class="node-title">${esc(doc.document_id)}</div>
+      ${doc.reason ? `<div class="reason">${esc(doc.reason)}</div>` : ""}
+    </div>`).join("");
+  const walks = (trajectory.document_walks || []).map(renderDocumentWalk).join("");
+  const retrieved = (trajectory.retrieved_nodes || []).map(node => `
+    <div class="candidate selected">
+      <div class="node-title">${esc(node.document_id)} · ${esc(node.node_id || "")} ${node.node_title ? `· ${esc(node.node_title)}` : ""}</div>
+      <div class="node-id">[${esc(node.start_char)}:${esc(node.end_char)}] score=${fmt(node.score)}</div>
+      ${node.reason ? `<div class="reason">${esc(node.reason)}</div>` : ""}
+    </div>`).join("");
+  $("#reasoning-detail").innerHTML = `
+    <div class="panel trace-section">
+      <h2>Question</h2>
+      <div class="query">${esc(item.ex.query)}</div>
+    </div>
+    <div class="panel trace-section">
+      <h2>Document Selection</h2>
+      <div class="badges">
+        <span class="badge">${esc(docSelection.source || "unknown")}</span>
+        <span class="badge">candidates ${esc(docSelection.candidate_document_count || "?")}</span>
+        ${docSelection.catalog_truncated ? `<span class="badge mid">catalog truncated</span>` : ""}
+      </div>
+      <div class="candidate-list">${docBlocks || `<div class="empty">No selected documents</div>`}</div>
+      ${docSelection.catalog_preview ? jsonDetails("Catalog preview", docSelection.catalog_preview) : ""}
+      ${jsonDetails("Raw document response", docSelection.raw_response)}
+    </div>
+    <div class="panel trace-section">
+      <h2>ToC Tree Walks</h2>
+      ${walks || `<div class="empty">No tree-walk trace</div>`}
+    </div>
+    <div class="panel trace-section">
+      <h2>Final Retrieved Nodes</h2>
+      <div class="candidate-list">${retrieved || `<div class="empty">No retrieved nodes</div>`}</div>
+    </div>
+    ${(trajectory.errors || []).length ? `<div class="panel trace-section"><h2>Errors and Fallbacks</h2><p class="err">${esc((trajectory.errors || []).join("; "))}</p></div>` : ""}`;
+}
+
+function renderDocumentWalk(walk) {
+  const finalSelections = (walk.final_selections || []).map(sel =>
+    `<span class="badge">${esc(sel.node_id || "")}</span>`).join("");
+  const steps = (walk.steps || []).map(renderTraceStep).join("");
+  return `<div class="trace-step">
+    <div class="trace-title">${esc(walk.document_id)} <span class="badge">${esc(walk.source || "unknown")}</span></div>
+    ${walk.document_reason ? `<div class="reason">${esc(walk.document_reason)}</div>` : ""}
+    ${walk.error ? `<p class="err">${esc(walk.error)}</p>` : ""}
+    <div class="badges">${finalSelections}</div>
+    ${steps || `<div class="empty">No child-selection steps recorded.</div>`}
+  </div>`;
+}
+
+function renderTraceStep(step) {
+  const current = step.current_node || {
+    node_id: step.node_id,
+    unit_start: step.unit_start,
+    unit_end: step.unit_end,
+  };
+  const accepted = new Map((step.accepted_selections || []).map(sel => [String(sel.node_id || ""), sel]));
+  const candidates = (step.candidate_children || []).map(child => {
+    const selection = accepted.get(String(child.node_id || ""));
+    return `<div class="candidate ${selection ? "selected" : ""}">
+      <div class="node-title">${esc(child.title || child.node_id)} <span class="node-id">${esc(child.node_id)} ${unitLabel(child)}</span></div>
+      ${child.summary ? `<div class="node-summary">${esc(child.summary)}</div>` : ""}
+      ${selection?.reason ? `<div class="reason">${esc(selection.reason)}</div>` : ""}
+    </div>`;
+  }).join("");
+  const fallback = step.selection_source === "keyword_fallback"
+    ? `<span class="badge mid">${esc(step.fallback_reason || "keyword fallback")}</span>`
+    : "";
+  return `<div class="trace-step">
+    <div class="trace-title">Step ${esc(step.step || "")}: ${esc(current.title || current.node_id || "")} <span class="node-id">${esc(current.node_id || "")} ${unitLabel(current)}</span></div>
+    <div class="badges">
+      <span class="badge">${esc(step.selection_source || "llm")}</span>
+      <span class="badge">children ${esc(step.candidate_child_count || step.child_count || 0)}</span>
+      ${step.prompt_child_list_truncated ? `<span class="badge mid">prompt truncated</span>` : ""}
+      ${fallback}
+    </div>
+    <div class="candidate-list">${candidates || renderSelectionList(step.accepted_selections || step.llm_selections || [])}</div>
+    ${jsonDetails("Raw node response", step.raw_response || step.selection_raw)}
+  </div>`;
+}
+
+function renderSelectionList(selections) {
+  return (selections || []).map(sel => `
+    <div class="candidate selected">
+      <div class="node-title">${esc(sel.node_id || "")}</div>
+      ${sel.reason ? `<div class="reason">${esc(sel.reason)}</div>` : ""}
+    </div>`).join("") || `<div class="empty">No selections</div>`;
+}
+
+function unitLabel(node) {
+  const start = node.unit_start;
+  const end = node.unit_end;
+  if (start == null || end == null) return "";
+  return start === end ? `[u${esc(start)}]` : `[u${esc(start)}-u${esc(end)}]`;
+}
+
+function jsonDetails(title, value) {
+  if (value == null || value === "") return "";
+  const body = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (!body || body === "{}" || body === "[]") return "";
+  return `<details><summary>${esc(title)}</summary><pre>${esc(body)}</pre></details>`;
 }
 
 function renderToc() {

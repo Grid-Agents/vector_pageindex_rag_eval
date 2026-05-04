@@ -38,6 +38,16 @@ def main() -> None:
         action="store_true",
         help="Skip answer generation. This is the default.",
     )
+    parser.add_argument(
+        "--record-reasoning-trajectory",
+        action="store_true",
+        help="Record PageIndex document and ToC node selection traces.",
+    )
+    parser.add_argument(
+        "--no-record-reasoning-trajectory",
+        action="store_true",
+        help="Disable PageIndex reasoning trace recording.",
+    )
     parser.add_argument("--force-reindex", action="store_true", help="Rebuild vector and PageIndex caches.")
     parser.add_argument("--run-id", help="Custom run id.")
     args = parser.parse_args()
@@ -83,6 +93,10 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["run"]["answer_with_llm"] = True
     if args.retrieval_only:
         cfg["run"]["answer_with_llm"] = False
+    if args.record_reasoning_trajectory:
+        cfg["pageindex"]["record_reasoning_trajectory"] = True
+    if args.no_record_reasoning_trajectory:
+        cfg["pageindex"]["record_reasoning_trajectory"] = False
     if args.force_reindex:
         cfg["vector_rag"]["force_reindex"] = True
         cfg["pageindex"]["force_reindex"] = True
