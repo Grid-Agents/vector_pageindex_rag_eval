@@ -8,6 +8,7 @@ def test_build_cli_force_reindex_only_selected_method():
         "run": {"methods": ["pageindex"]},
         "vector_rag": {"force_reindex": False, "reranker": {}},
         "pageindex": {"force_reindex": False},
+        "pageindex_official": {"force_reindex": False},
         "data": {},
     }
     args = argparse.Namespace(
@@ -27,6 +28,7 @@ def test_build_cli_force_reindex_only_selected_method():
 
     assert cfg["pageindex"]["force_reindex"] is True
     assert cfg["vector_rag"]["force_reindex"] is False
+    assert cfg["pageindex_official"]["force_reindex"] is False
 
 
 def test_build_cli_resolve_methods_rejects_unknown_method():
@@ -38,3 +40,9 @@ def test_build_cli_resolve_methods_rejects_unknown_method():
         assert "Unknown method(s)" in str(exc)
     else:
         raise AssertionError("Expected ValueError for unknown build method")
+
+
+def test_build_cli_resolve_methods_accepts_official_pageindex():
+    cfg = {"run": {"methods": ["vector", "pageindex_official"]}}
+
+    assert _resolve_methods(cfg) == ["vector", "pageindex_official"]

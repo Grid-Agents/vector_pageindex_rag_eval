@@ -12,6 +12,7 @@ from .config import resolve_path
 from .data import LegalBenchRAGLoader
 from .llm import AnthropicLLM
 from .metrics import score_retrieval
+from .official_pageindex import OfficialPageIndexRAG
 from .pageindex_rag import PageIndexRAG
 from .types import Example, RetrievalOutput, Usage
 from .vector_rag import VectorRAG
@@ -45,11 +46,11 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     )
 
     methods = [name.lower() for name in run_cfg.get("methods", ["vector", "pageindex"])]
-    unknown_methods = sorted(set(methods) - {"vector", "pageindex"})
+    unknown_methods = sorted(set(methods) - {"vector", "pageindex", "pageindex_official"})
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
     llm = None
-    if answer_with_llm or "pageindex" in methods:
+    if answer_with_llm or "pageindex" in methods or "pageindex_official" in methods:
         llm = AnthropicLLM(cfg.get("llm", {}))
 
     systems = {}
@@ -79,6 +80,23 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         pageindex.build(documents)
         systems["pageindex"] = pageindex
         setup_usage_by_method["pageindex"] = pageindex.setup_usage
+    if "pageindex_official" in methods:
+        official_cfg = cfg.get("pageindex_official", {})
+        official_pageindex = OfficialPageIndexRAG(
+            official_cfg,
+            llm,
+            cache_dir=resolve_path(
+                PROJECT_ROOT,
+                official_cfg.get("cache_dir", ".cache/pageindex_official"),
+            ),
+        )
+        print(
+            "Building official PageIndex trees for "
+            f"{len(documents)} documents..."
+        )
+        official_pageindex.build(documents)
+        systems["pageindex_official"] = official_pageindex
+        setup_usage_by_method["pageindex_official"] = official_pageindex.setup_usage
 
     run_examples = []
     rows = []
@@ -129,8 +147,10 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         run_examples.append(example_record)
 
     toc_trees = []
-    if "pageindex" in systems:
-        toc_trees = systems["pageindex"].toc_trees()
+    for method_name, system in systems.items():
+        if hasattr(system, "toc_trees"):
+            for item in system.toc_trees():
+                toc_trees.append({"method": method_name, **item})
 
     run_record = {
         "run_id": run_id,

@@ -1,9 +1,10 @@
 # RAG Implementations
 
-This repo compares two retrieval pipelines over LegalBench-RAG text files:
+This repo compares retrieval pipelines over LegalBench-RAG text files:
 
 - `vector`: chunk text, embed chunks locally, search by cosine similarity, then optionally rerank.
 - `pageindex`: build a semantic table-of-contents tree per document, then ask an LLM to navigate the tree and select relevant nodes.
+- `pageindex_official`: convert LegalBench text into Markdown, build the tree with VectifyAI's official self-hosted PageIndex Markdown implementation, then use the official LLM tree-search pattern to select nodes.
 
 Both implementations return the same `RetrievalOutput` shape: a list of `RetrievedSpan` objects with `document_id`, exact character offsets, retrieved text, score, and retriever metadata. The runner scores retrieval with character-level overlap against LegalBench-RAG gold spans, plus document-level hit metrics. Optional generated answers are saved only for qualitative review.
 
@@ -349,6 +350,8 @@ Vector RAG retrieves by embedding similarity at chunk granularity. It is fast af
 
 PageIndex retrieves by LLM navigation over document structure. It can choose larger semantic regions and use summaries/titles rather than only dense similarity. It has two LLM-dependent phases: optional build-time semanticization and query-time node selection. Caching is important because build-time semanticization can be expensive on large corpora.
 
+Official PageIndex uses the same runner contract but a different tree builder. `OfficialPageIndexRAG` lives under `src/rag_eval/official_pageindex`, auto-loads or clones `https://github.com/VectifyAI/PageIndex`, and calls the upstream `md_to_tree` function. Since LegalBench-RAG documents are text files rather than PDFs, it first emits Markdown headings for detected sections and virtual pages so the upstream Markdown parser can build a hierarchy. Query-time retrieval follows the official cookbook pattern: send the question plus the PageIndex tree to the LLM and ask for relevant `node_id` values. Returned spans are still mapped back to original LegalBench character offsets.
+
 ## Scoring and Output
 
 The runner writes:
@@ -372,4 +375,4 @@ Document-level metrics are also recorded from unique `document_id` matches:
 
 Generated answers are not part of any aggregate score.
 
-For PageIndex runs, `run.json` also includes `toc_trees`, which is useful for inspecting what the LLM navigated during query-time selection.
+For PageIndex runs, `run.json` also includes `toc_trees`, tagged by method, which is useful for inspecting what the LLM navigated during query-time selection.

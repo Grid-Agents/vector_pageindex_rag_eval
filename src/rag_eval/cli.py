@@ -21,7 +21,10 @@ def main() -> None:
         dest="benchmarks",
         help="Benchmark name, comma-separated benchmark names, or all.",
     )
-    parser.add_argument("--methods", help="Comma-separated methods: vector,pageindex.")
+    parser.add_argument(
+        "--methods",
+        help="Comma-separated methods: vector,pageindex,pageindex_official.",
+    )
     parser.add_argument("--n", type=int, help="Number of examples to run.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
     parser.add_argument("--corpus-scope", choices=["sampled", "all"])
@@ -68,6 +71,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     cfg.setdefault("vector_rag", {})
     cfg.setdefault("vector_rag", {}).setdefault("reranker", {})
     cfg.setdefault("pageindex", {})
+    cfg.setdefault("pageindex_official", {})
 
     if args.data_dir:
         cfg["data"]["data_dir"] = args.data_dir
@@ -95,11 +99,14 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["run"]["answer_with_llm"] = False
     if args.record_reasoning_trajectory:
         cfg["pageindex"]["record_reasoning_trajectory"] = True
+        cfg["pageindex_official"]["record_reasoning_trajectory"] = True
     if args.no_record_reasoning_trajectory:
         cfg["pageindex"]["record_reasoning_trajectory"] = False
+        cfg["pageindex_official"]["record_reasoning_trajectory"] = False
     if args.force_reindex:
         cfg["vector_rag"]["force_reindex"] = True
         cfg["pageindex"]["force_reindex"] = True
+        cfg["pageindex_official"]["force_reindex"] = True
     if args.run_id:
         cfg["run"]["run_id"] = args.run_id
 

@@ -62,6 +62,7 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .method { border-left: 4px solid #89939e; }
 .method.vector { border-left-color: #2f80ed; }
 .method.pageindex { border-left-color: #8a5cf6; }
+.method.pageindex_official { border-left-color: #00a884; }
 .query { padding: 10px; background: #fafafa; border: 1px solid #eee; border-radius: 6px; white-space: pre-wrap; }
 .answer { margin: 8px 0; padding: 9px; background: #fafafa; border-left: 3px solid #c7c7c0; white-space: pre-wrap; }
 .span { margin-top: 8px; border: 1px solid #deded8; border-radius: 6px; overflow: hidden; }
@@ -451,11 +452,15 @@ function spanBlock(span) {
 }
 
 function pageindexReasoningItems() {
-  return (currentRun?.examples || []).map((ex, idx) => {
-    const result = (ex.methods || {}).pageindex;
-    const trajectory = result ? pageindexTrajectory(result) : null;
-    return { ex, idx, result, trajectory };
-  }).filter(item => item.trajectory);
+  const items = [];
+  (currentRun?.examples || []).forEach((ex, idx) => {
+    Object.entries(ex.methods || {}).forEach(([method, result]) => {
+      if (!method.includes("pageindex")) return;
+      const trajectory = result ? pageindexTrajectory(result) : null;
+      if (trajectory) items.push({ ex, idx, method, result, trajectory });
+    });
+  });
+  return items;
 }
 
 function pageindexTrajectory(result) {
@@ -501,6 +506,7 @@ function renderReasoning() {
       <div class="ex-id">${esc(item.ex.benchmark)} / ${esc(item.ex.id)}</div>
       <div class="ex-q">${esc((item.ex.query || "").slice(0, 160))}${(item.ex.query || "").length > 160 ? "..." : ""}</div>
       <div class="badges">
+        <span class="badge">${esc(item.method || "pageindex")}</span>
         <span class="badge">docs ${esc(selectedDocs)}</span>
         <span class="badge">nodes ${esc(retrievedNodes)}</span>
       </div>
@@ -539,6 +545,7 @@ function renderReasoningDetail(item) {
   $("#reasoning-detail").innerHTML = `
     <div class="panel trace-section">
       <h2>Question</h2>
+      <div class="badges"><span class="badge">${esc(item.method || "pageindex")}</span></div>
       <div class="query">${esc(item.ex.query)}</div>
     </div>
     <div class="panel trace-section">
@@ -631,7 +638,12 @@ function jsonDetails(title, value) {
 
 function renderToc() {
   const trees = currentRun.toc_trees || [];
-  const list = trees.map((item, idx) => `<div class="toc-doc ${idx === currentTocDoc ? "active" : ""}" data-idx="${idx}">${esc(item.document_id)}</div>`).join("");
+  const list = trees.map((item, idx) => {
+    const method = item.method || "pageindex";
+    return `<div class="toc-doc ${idx === currentTocDoc ? "active" : ""}" data-idx="${idx}">
+      <span class="badge">${esc(method)}</span> ${esc(item.document_id)}
+    </div>`;
+  }).join("");
   $("#toc").innerHTML = `
     <div class="toc-layout">
       <div class="panel toc-list">${list || `<div class="empty">No PageIndex trees in this run.</div>`}</div>

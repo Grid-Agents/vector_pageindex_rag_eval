@@ -49,11 +49,39 @@ pageindex:
   record_reasoning_trajectory: true
   reasoning_max_catalog_chars: 12000
   reasoning_max_node_summary_chars: 320
-  # TODO: Use their official repo to implement and see the performance difference
+
+pageindex_official:
+  cache_dir: .cache/pageindex_official
+  force_reindex: false
+  # Uses the official VectifyAI/PageIndex self-hosted repo. If repo_path is empty,
+  # the adapter clones repo_url into the cache directory on first use.
+  repo_url: https://github.com/VectifyAI/PageIndex.git
+  repo_ref: main
+  repo_path:
+  auto_clone_repo: true
+  build_with_llm: true
+  virtual_page_target_tokens: 900
+  virtual_page_max_tokens: 1200
+  if_thinning: false
+  thinning_threshold: 5000
+  if_add_node_summary: yes
+  if_add_doc_description: yes
+  if_add_node_text: no
+  summary_token_threshold: 200
+  selected_documents: 5
+  max_document_catalog_chars: 120000
+  max_tree_chars: 24000
+  selected_nodes: 10
+  max_retrieved_chars_per_node: 5000
+  record_reasoning_trajectory: true
+  reasoning_max_catalog_chars: 12000
+  reasoning_max_node_summary_chars: 320
+  reasoning_max_trace_nodes: 250
 
 run:
   results_dir: results
-  methods: ["vector", "pageindex"]
+  # Add "pageindex_official" to compare against VectifyAI's official implementation.
+  methods: ["vector", "pageindex", "pageindex_official"]
   n: 10
   seed: 42
   # Retrieval metrics are scored against benchmark snippets, not generated answers.

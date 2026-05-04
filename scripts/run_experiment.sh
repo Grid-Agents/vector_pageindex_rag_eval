@@ -4,7 +4,7 @@ set -euo pipefail
 CONFIG="configs/default.yaml"
 BENCHMARKS="cuad"
 N="10"
-METHODS="vector,pageindex"
+METHODS="vector,pageindex,pageindex_official"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
 TOP_K=""
@@ -24,7 +24,7 @@ Options:
   --benchmark NAME          Benchmark to run. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Number of examples. Default: 10.
-  --methods LIST            Comma-separated methods. Default: vector,pageindex.
+  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official. Default: vector,pageindex.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, or fixed.
   --top-k N                 Vector retrieval candidate top-k.

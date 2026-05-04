@@ -7,6 +7,7 @@ from typing import Any
 from .config import load_config, resolve_path, split_csv
 from .data import LegalBenchRAGLoader
 from .llm import AnthropicLLM
+from .official_pageindex import OfficialPageIndexRAG
 from .pageindex_rag import PageIndexRAG
 from .runner import PROJECT_ROOT
 from .vector_rag import VectorRAG
@@ -26,7 +27,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--methods",
-        help="Comma-separated methods to build: vector,pageindex.",
+        help="Comma-separated methods to build: vector,pageindex,pageindex_official.",
     )
     parser.add_argument("--n", type=int, help="Number of sampled examples for sampled scope.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
@@ -57,6 +58,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     cfg.setdefault("vector_rag", {})
     cfg.setdefault("vector_rag", {}).setdefault("reranker", {})
     cfg.setdefault("pageindex", {})
+    cfg.setdefault("pageindex_official", {})
 
     if args.data_dir:
         cfg["data"]["data_dir"] = args.data_dir
@@ -80,6 +82,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         methods = set(_resolve_methods(cfg))
         cfg["vector_rag"]["force_reindex"] = "vector" in methods
         cfg["pageindex"]["force_reindex"] = "pageindex" in methods
+        cfg["pageindex_official"]["force_reindex"] = "pageindex_official" in methods
 
 
 def build_indexes(cfg: dict[str, Any]) -> None:
@@ -132,10 +135,31 @@ def build_indexes(cfg: dict[str, Any]) -> None:
             f"(setup cost ${pageindex.setup_usage.estimated_cost_usd:.4f})"
         )
 
+    if "pageindex_official" in methods:
+        official_cfg = cfg.get("pageindex_official", {})
+        llm = None
+        if official_cfg.get("build_with_llm", True):
+            llm = AnthropicLLM(cfg.get("llm", {}))
+        official_pageindex = OfficialPageIndexRAG(
+            official_cfg,
+            llm,
+            cache_dir=resolve_path(
+                PROJECT_ROOT,
+                official_cfg.get("cache_dir", ".cache/pageindex_official"),
+            ),
+        )
+        print(f"Building official PageIndex trees into {official_pageindex.cache_dir}...")
+        official_pageindex.build(documents)
+        print(
+            "Official PageIndex trees ready in "
+            f"{official_pageindex.cache_dir} "
+            f"(setup cost ${official_pageindex.setup_usage.estimated_cost_usd:.4f})"
+        )
+
 
 def _resolve_methods(cfg: dict[str, Any]) -> list[str]:
     methods = [name.lower() for name in cfg.get("run", {}).get("methods", ["pageindex"])]
-    unknown_methods = sorted(set(methods) - {"vector", "pageindex"})
+    unknown_methods = sorted(set(methods) - {"vector", "pageindex", "pageindex_official"})
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
     if not methods:
