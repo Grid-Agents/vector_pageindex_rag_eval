@@ -2,7 +2,7 @@
 
 This repo compares retrieval pipelines over LegalBench-RAG text files:
 
-- `vector`: chunk text, embed chunks locally, search by cosine similarity, then optionally rerank.
+- `vector`: chunk text, embed chunks, search by dense vector or hybrid BM25+dense scores, then optionally rerank.
 - `pageindex`: build a semantic table-of-contents tree per document, then ask an LLM to navigate the tree and select relevant nodes.
 - `pageindex_official`: convert LegalBench text into Markdown, build the tree with VectifyAI's official self-hosted PageIndex Markdown implementation, then use the official LLM tree-search pattern to select nodes.
 
@@ -34,6 +34,7 @@ Supported chunk strategies:
 - `fixed`: slices every `chunk_size` characters with `chunk_overlap`.
 - `recursive`: tries to end chunks on natural separators such as blank lines, newlines, sentence breaks, semicolons, commas, and spaces.
 - `hierarchical`: detects legal-style headings first, then chunks within oversized sections.
+- `semantic`: embeds paragraph/sentence units, breaks on low-cohesion boundaries, and still enforces `chunk_size` plus `chunk_overlap`.
 
 `hierarchical` is the default. It detects headings with `HEADING_RE`, including patterns such as `Article ...`, `Section ...`, numbered headings, and all-caps headings. If section detection does not find useful structure, it falls back to recursive chunking.
 
@@ -62,11 +63,12 @@ The vector implementation is `VectorRAG` in `src/rag_eval/vector_rag.py`.
    - `vector_rag.chunk_strategy`
    - `vector_rag.chunk_size`
    - `vector_rag.chunk_overlap`
-4. Loads a local SentenceTransformers embedder from `vector_rag.embedding_model`.
+4. Loads an embedder from `vector_rag.embedding_provider` and `vector_rag.embedding_model`.
 5. Embeds each chunk's retrieval text.
 6. Stores normalized embeddings in a NumPy `float32` matrix.
 7. Writes the chunk metadata and embedding matrix to the vector cache.
-8. Optionally loads a SentenceTransformers `CrossEncoder` reranker.
+8. Optionally builds a BM25 index for `search_strategy: hybrid`.
+9. Optionally loads a reranker from `vector_rag.reranker.provider` and `vector_rag.reranker.model`.
 
 The default config uses:
 
@@ -75,14 +77,20 @@ vector_rag:
   cache_dir: .cache/vector
   force_reindex: false
   chunk_strategy: hierarchical
+  search_strategy: vector
+  evaluate_combinations: true
+  chunk_strategies: [hierarchical, recursive, fixed, semantic]
+  search_strategies: [vector, hybrid]
   chunk_size: 1200
   chunk_overlap: 120
+  embedding_provider: sentence_transformers
   embedding_model: BAAI/bge-large-en-v1.5
   query_instruction: "Represent this sentence for searching relevant passages: "
   batch_size: 32
   top_k: 20
   reranker:
     enabled: true
+    provider: sentence_transformers
     model: BAAI/bge-reranker-v2-m3
     top_k: 5
 ```
@@ -119,11 +127,14 @@ The cache key includes:
 - `chunk_strategy`
 - `chunk_size`
 - `chunk_overlap`
+- semantic chunking settings
+- `embedding_provider`
 - `embedding_model`
+- `embedding_output_dimension`
 - embedding text format
 - each indexed document's `document_id`, text length, and SHA-1 hash
 
-The cache is reused only when all of those inputs match. Changing the corpus, chunking settings, or embedding model creates a different cache key. Set `vector_rag.force_reindex: true` or pass `--force-reindex` to rebuild the vector cache.
+The cache is reused only when all of those inputs match. Changing the corpus, chunking settings, embedding provider, or embedding model creates a different cache key. Search strategy is intentionally not part of the embedding cache key, so vector and hybrid variants can share the same chunk embeddings. Set `vector_rag.force_reindex: true` or pass `--force-reindex` to rebuild the vector cache.
 
 The cache skips the slow document embedding pass on later runs. The query embedder and optional reranker are still loaded because they are needed at query time.
 
@@ -135,19 +146,26 @@ The cache skips the slow document embedding pass on later runs. The query embedd
 2. Embeds the query with normalized embeddings.
 3. Computes dot product scores with the stored chunk matrix.
 4. Because both document and query embeddings are normalized, dot product is cosine similarity.
-5. Takes the top `vector_rag.top_k` candidate chunks.
-6. If reranking is enabled, scores `(query, chunk_text)` pairs with the cross-encoder.
-7. Returns the top `vector_rag.reranker.top_k` reranked chunks as `RetrievedSpan` objects.
+5. For `search_strategy: hybrid`, also scores chunks with BM25 and combines min-max-normalized dense and BM25 scores.
+6. Takes the top `vector_rag.top_k` candidate chunks.
+7. If reranking is enabled, scores candidates with the configured reranker.
+8. Returns the top `vector_rag.reranker.top_k` reranked chunks as `RetrievedSpan` objects.
 
 Returned vector spans include metadata:
 
 ```json
 {
   "retriever": "vector",
+  "search_strategy": "hybrid",
   "chunk_title": "...",
-  "chunk_level": 1
+  "chunk_level": 1,
+  "vector_score": 0.72,
+  "bm25_score": 4.1,
+  "hybrid_score": 0.86
 }
 ```
+
+`run.methods: ["vector"]` expands to named vector variants when `vector_rag.evaluate_combinations` is true. The default config evaluates the cross product of four chunkers (`hierarchical`, `recursive`, `fixed`, `semantic`) and two search strategies (`vector`, `hybrid`) for the `bge` model profile. Pass `--include-voyage` to append a Voyage profile using `voyage-4-large` embeddings and `rerank-2.5` reranking; this requires `VOYAGE_API_KEY`.
 
 Vector RAG has no LLM setup cost. It uses local embedding and reranking models, then incurs answer-generation cost only if `run.answer_with_llm` is enabled.
 

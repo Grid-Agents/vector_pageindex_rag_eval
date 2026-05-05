@@ -9,8 +9,9 @@ from .data import LegalBenchRAGLoader
 from .llm import AnthropicLLM
 from .official_pageindex import OfficialPageIndexRAG
 from .pageindex_rag import PageIndexRAG
-from .runner import PROJECT_ROOT
+from .runner import PROJECT_ROOT, vector_variant_configs
 from .vector_rag import VectorRAG
+from .vector_config import add_vector_cli_args, apply_vector_cli_overrides
 
 
 def main() -> None:
@@ -32,11 +33,7 @@ def main() -> None:
     parser.add_argument("--n", type=int, help="Number of sampled examples for sampled scope.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
     parser.add_argument("--corpus-scope", choices=["sampled", "all"])
-    parser.add_argument(
-        "--chunk-strategy", choices=["hierarchical", "recursive", "fixed"]
-    )
-    parser.add_argument("--top-k", type=int, help="Vector retrieval candidate top-k.")
-    parser.add_argument("--rerank-top-k", type=int, help="Reranker output top-k.")
+    add_vector_cli_args(parser)
     parser.add_argument(
         "--force-reindex",
         action="store_true",
@@ -72,12 +69,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["run"]["seed"] = args.seed
     if args.corpus_scope:
         cfg["data"]["corpus_scope"] = args.corpus_scope
-    if args.chunk_strategy:
-        cfg["vector_rag"]["chunk_strategy"] = args.chunk_strategy
-    if args.top_k is not None:
-        cfg["vector_rag"]["top_k"] = args.top_k
-    if args.rerank_top_k is not None:
-        cfg["vector_rag"]["reranker"]["top_k"] = args.rerank_top_k
+    apply_vector_cli_overrides(cfg["vector_rag"], args)
     if args.force_reindex:
         methods = set(_resolve_methods(cfg))
         cfg["vector_rag"]["force_reindex"] = "vector" in methods
@@ -104,16 +96,16 @@ def build_indexes(cfg: dict[str, Any]) -> None:
     print(f"Loaded {len(documents)} documents for cache building.")
 
     if "vector" in methods:
-        vector_cfg = cfg.get("vector_rag", {})
-        vector = VectorRAG(
-            vector_cfg,
-            cache_dir=resolve_path(
-                PROJECT_ROOT, vector_cfg.get("cache_dir", ".cache/vector")
-            ),
-        )
-        print(f"Building vector index into {vector.cache_dir}...")
-        vector.build(documents)
-        print(f"Vector index ready in {vector.cache_dir}")
+        for method_name, vector_cfg in vector_variant_configs(cfg):
+            vector = VectorRAG(
+                vector_cfg,
+                cache_dir=resolve_path(
+                    PROJECT_ROOT, vector_cfg.get("cache_dir", ".cache/vector")
+                ),
+            )
+            print(f"Building {method_name} index into {vector.cache_dir}...")
+            vector.build(documents)
+            print(f"{method_name} index ready in {vector.cache_dir}")
 
     if "pageindex" in methods:
         pageindex_cfg = cfg.get("pageindex", {})

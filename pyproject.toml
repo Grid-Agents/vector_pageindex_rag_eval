@@ -9,6 +9,7 @@ dependencies = [
   "pyyaml>=6.0.0",
   "sentence-transformers>=3.0.0",
   "tqdm>=4.66.0",
+  "voyageai>=0.3.7",
 ]
 
 [dependency-groups]

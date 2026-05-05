@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .answer import answer_question
-from .config import resolve_path
+from .config import deep_update, resolve_path
 from .data import LegalBenchRAGLoader
 from .llm import AnthropicLLM
 from .metrics import score_retrieval
@@ -56,17 +56,19 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     systems = {}
     setup_usage_by_method: dict[str, Usage] = {}
     if "vector" in methods:
-        vector_cfg = cfg.get("vector_rag", {})
-        vector = VectorRAG(
-            vector_cfg,
-            cache_dir=resolve_path(
-                PROJECT_ROOT, vector_cfg.get("cache_dir", ".cache/vector")
-            ),
-        )
-        print(f"Building vector index for {len(documents)} documents...")
-        vector.build(documents)
-        systems["vector"] = vector
-        setup_usage_by_method["vector"] = Usage()
+        for method_name, vector_cfg in vector_variant_configs(cfg):
+            vector = VectorRAG(
+                vector_cfg,
+                cache_dir=resolve_path(
+                    PROJECT_ROOT, vector_cfg.get("cache_dir", ".cache/vector")
+                ),
+            )
+            print(
+                f"Building {method_name} index for {len(documents)} documents..."
+            )
+            vector.build(documents)
+            systems[method_name] = vector
+            setup_usage_by_method[method_name] = Usage()
     if "pageindex" in methods:
         pageindex_cfg = cfg.get("pageindex", {})
         pageindex = PageIndexRAG(
@@ -326,3 +328,103 @@ def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def vector_variant_configs(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    vector_cfg = cfg.get("vector_rag", {})
+    explicit_variants = vector_cfg.get("variants") or []
+    if explicit_variants:
+        base_cfg = _vector_base_config(vector_cfg)
+        variants = []
+        for idx, variant in enumerate(explicit_variants, start=1):
+            if not isinstance(variant, dict):
+                raise ValueError("vector_rag.variants entries must be mappings")
+            method_name = str(variant.get("name") or f"vector_variant_{idx}")
+            variant_cfg = deep_update(
+                base_cfg, {key: value for key, value in variant.items() if key != "name"}
+            )
+            variants.append((_unique_method_name(method_name, variants), variant_cfg))
+        return variants
+
+    if not vector_cfg.get("evaluate_combinations", False):
+        return [("vector", vector_cfg)]
+
+    base_cfg = _vector_base_config(vector_cfg)
+    chunk_strategies = list(
+        vector_cfg.get("chunk_strategies")
+        or [vector_cfg.get("chunk_strategy", "hierarchical")]
+    )
+    search_strategies = list(
+        vector_cfg.get("search_strategies")
+        or [vector_cfg.get("search_strategy", "vector")]
+    )
+    model_profiles = vector_cfg.get("model_profiles") or [
+        {
+            "name": _model_profile_name(vector_cfg),
+            "embedding_provider": vector_cfg.get(
+                "embedding_provider", "sentence_transformers"
+            ),
+            "embedding_model": vector_cfg.get("embedding_model"),
+            "query_instruction": vector_cfg.get("query_instruction", ""),
+            "reranker": vector_cfg.get("reranker", {}),
+        }
+    ]
+
+    variants: list[tuple[str, dict[str, Any]]] = []
+    for profile in model_profiles:
+        if not isinstance(profile, dict):
+            raise ValueError("vector_rag.model_profiles entries must be mappings")
+        profile_name = _slug(str(profile.get("name") or _model_profile_name(profile)))
+        profile_cfg = {key: value for key, value in profile.items() if key != "name"}
+        for chunk_strategy in chunk_strategies:
+            for search_strategy in search_strategies:
+                variant_cfg = deep_update(base_cfg, profile_cfg)
+                variant_cfg["chunk_strategy"] = str(chunk_strategy)
+                variant_cfg["search_strategy"] = str(search_strategy)
+                method_name = (
+                    f"vector_{profile_name}_"
+                    f"{_slug(str(chunk_strategy))}_{_slug(str(search_strategy))}"
+                )
+                variants.append(
+                    (_unique_method_name(method_name, variants), variant_cfg)
+                )
+    return variants
+
+
+def _vector_base_config(vector_cfg: dict[str, Any]) -> dict[str, Any]:
+    excluded = {
+        "variants",
+        "evaluate_combinations",
+        "chunk_strategies",
+        "search_strategies",
+        "model_profiles",
+    }
+    return {key: value for key, value in vector_cfg.items() if key not in excluded}
+
+
+def _model_profile_name(cfg: dict[str, Any]) -> str:
+    provider = str(cfg.get("embedding_provider", "sentence_transformers"))
+    model = str(cfg.get("embedding_model", provider))
+    if "bge" in model.lower():
+        return "bge"
+    if "voyage" in model.lower() or provider.lower().startswith("voyage"):
+        return "voyage"
+    return model.rsplit("/", 1)[-1]
+
+
+def _slug(value: str) -> str:
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in value)
+    slug = "_".join(part for part in slug.split("_") if part)
+    return slug or "variant"
+
+
+def _unique_method_name(
+    method_name: str, existing: list[tuple[str, dict[str, Any]]]
+) -> str:
+    existing_names = {name for name, _ in existing}
+    if method_name not in existing_names:
+        return method_name
+    suffix = 2
+    while f"{method_name}_{suffix}" in existing_names:
+        suffix += 1
+    return f"{method_name}_{suffix}"

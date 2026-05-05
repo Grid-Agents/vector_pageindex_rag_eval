@@ -2,7 +2,7 @@
 
 This repo runs small or full LegalBench-RAG experiments comparing:
 
-- `vector`: hierarchical chunking by default, local sentence-transformer embeddings, and the open-source `BAAI/bge-reranker-v2-m3` reranker.
+- `vector`: evaluates chunking/search variants by default, using local sentence-transformer embeddings and the open-source `BAAI/bge-reranker-v2-m3` reranker unless another model profile is selected.
 - `pageindex`: a PageIndex-style semantic table-of-contents tree built over virtual pages, with Claude semanticizing every page/span at build time and then traversing the tree to page nodes at query time.
 - `pageindex_official`: an adapter around VectifyAI's official self-hosted PageIndex repo. LegalBench-RAG documents are plain text, so the adapter converts each document into Markdown with section and virtual-page headings, calls the official `md_to_tree` implementation, then runs the official LLM tree-search pattern over the generated tree.
 
@@ -15,6 +15,8 @@ cd vector_pageindex_rag_eval
 uv sync --dev
 cp .env.example .env
 export ANTHROPIC_API_KEY=your_claude_api_key_here
+# Optional, only needed when using --include-voyage or Voyage configs.
+export VOYAGE_API_KEY=your_voyage_api_key_here
 ```
 
 Download LegalBench-RAG into `data/` with:
@@ -65,9 +67,30 @@ uv run python run_experiment.py \
   --benchmarks cuad,maud \
   --methods vector,pageindex \
   --chunk-strategy hierarchical \
+  --search-strategy hybrid \
   --top-k 30 \
   --rerank-top-k 5 \
   --corpus-scope sampled
+```
+
+By default, vector runs expand into all configured vector combinations:
+
+```text
+chunk_strategies: hierarchical, recursive, fixed, semantic
+search_strategies: vector, hybrid
+model_profiles: bge
+```
+
+To run one specific new combination plus a Voyage comparison:
+
+```bash
+scripts/run_experiment.sh \
+  --benchmark cuad \
+  --n 5 \
+  --methods vector \
+  --chunk-strategy semantic \
+  --search-strategy hybrid \
+  --include-voyage
 ```
 
 You can also use the shell wrapper:
@@ -125,9 +148,13 @@ Vector RAG settings:
 
 - `cache_dir`: persisted chunk metadata and embedding matrix cache
 - `force_reindex`: rebuild cached vector embeddings
-- `chunk_strategy`: `hierarchical`, `recursive`, or `fixed`
+- `evaluate_combinations`: expand `vector` into chunk/search/model-profile variants
+- `chunk_strategy`: `hierarchical`, `recursive`, `fixed`, or `semantic`
+- `search_strategy`: `vector` or `hybrid`
+- `hybrid`: BM25/vector weighting and BM25 constants
 - `embedding_model`: default `BAAI/bge-large-en-v1.5`
 - `reranker.model`: default `BAAI/bge-reranker-v2-m3`
+- `model_profiles`: named embedding/reranker profiles; pass `--include-voyage` to append `voyage-4-large` + `rerank-2.5`
 
 PageIndex settings:
 

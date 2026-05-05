@@ -20,16 +20,53 @@ vector_rag:
   cache_dir: .cache/vector
   force_reindex: false
   chunk_strategy: hierarchical
+  search_strategy: vector
+  # Default vector runs expand across every chunking x search strategy below.
+  evaluate_combinations: true
+  # chunk_strategies: [hierarchical, recursive, fixed, semantic]
+  chunk_strategies: [hierarchical]
+  # search_strategies: [vector, hybrid]
+  search_strategies: [hybrid]
   chunk_size: 1200
   chunk_overlap: 120
+  semantic_chunking:
+    break_percentile: 82
+    window_size: 3
+    min_chunk_size:
+  hybrid:
+    vector_weight: 0.65
+    bm25_weight: 0.35
+    bm25_k1: 1.5
+    bm25_b: 0.75
+  embedding_provider: sentence_transformers
   embedding_model: BAAI/bge-large-en-v1.5
   query_instruction: "Represent this sentence for searching relevant passages: "
-  batch_size: 32
+  batch_size: 8
   top_k: 20
   reranker:
     enabled: true
+    provider: sentence_transformers
     model: BAAI/bge-reranker-v2-m3
     top_k: 5
+  model_profiles:
+    - name: bge
+      embedding_provider: sentence_transformers
+      embedding_model: BAAI/bge-large-en-v1.5
+      query_instruction: "Represent this sentence for searching relevant passages: "
+      reranker:
+        enabled: true
+        provider: sentence_transformers
+        model: BAAI/bge-reranker-v2-m3
+        top_k: 5
+    # - name: voyage
+    #   embedding_provider: voyage
+    #   embedding_model: voyage-law-2
+    #   query_instruction: "Represent this sentence for searching relevant passages: "
+    #   reranker:
+    #     enabled: true
+    #     provider: voyage
+    #     model: rerank-2
+    #     top_k: 5
 
 pageindex:
   cache_dir: .cache/pageindex

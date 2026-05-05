@@ -61,3 +61,37 @@ def test_vector_rag_reuses_cached_embeddings(tmp_path, monkeypatch):
     assert second.embeddings is not None
     assert first.embeddings is not None
     assert np.array_equal(second.embeddings, first.embeddings)
+
+
+def test_hybrid_search_uses_bm25_signal(tmp_path, monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(
+            SentenceTransformer=FakeSentenceTransformer,
+            CrossEncoder=FakeCrossEncoder,
+        ),
+    )
+    cfg = {
+        "cache_dir": str(tmp_path),
+        "chunk_strategy": "fixed",
+        "chunk_size": 80,
+        "chunk_overlap": 0,
+        "search_strategy": "hybrid",
+        "embedding_model": "fake-embedder",
+        "top_k": 1,
+        "reranker": {"enabled": False},
+    }
+    documents = [
+        Document("a.txt", "unrelated boilerplate"),
+        Document("b.txt", "this clause contains the needle term"),
+    ]
+
+    rag = VectorRAG(cfg)
+    rag.build(documents)
+    result = rag.query("needle")
+
+    assert len(result.spans) == 1
+    assert result.spans[0].document_id == "b.txt"
+    assert result.spans[0].metadata["search_strategy"] == "hybrid"
+    assert result.spans[0].metadata["bm25_score"] > 0

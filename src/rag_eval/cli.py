@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import load_config, split_csv
 from .runner import PROJECT_ROOT, run_experiment
+from .vector_config import add_vector_cli_args, apply_vector_cli_overrides
 
 
 def main() -> None:
@@ -28,9 +29,7 @@ def main() -> None:
     parser.add_argument("--n", type=int, help="Number of examples to run.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
     parser.add_argument("--corpus-scope", choices=["sampled", "all"])
-    parser.add_argument("--chunk-strategy", choices=["hierarchical", "recursive", "fixed"])
-    parser.add_argument("--top-k", type=int, help="Vector retrieval candidate top-k.")
-    parser.add_argument("--rerank-top-k", type=int, help="Reranker output top-k.")
+    add_vector_cli_args(parser)
     parser.add_argument(
         "--answer-with-llm",
         action="store_true",
@@ -87,12 +86,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["run"]["seed"] = args.seed
     if args.corpus_scope:
         cfg["data"]["corpus_scope"] = args.corpus_scope
-    if args.chunk_strategy:
-        cfg["vector_rag"]["chunk_strategy"] = args.chunk_strategy
-    if args.top_k is not None:
-        cfg["vector_rag"]["top_k"] = args.top_k
-    if args.rerank_top_k is not None:
-        cfg["vector_rag"]["reranker"]["top_k"] = args.rerank_top_k
+    apply_vector_cli_overrides(cfg["vector_rag"], args)
     if args.answer_with_llm:
         cfg["run"]["answer_with_llm"] = True
     if args.retrieval_only:
