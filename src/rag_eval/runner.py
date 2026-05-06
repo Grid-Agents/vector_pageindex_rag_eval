@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,12 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     results_dir = resolve_path(PROJECT_ROOT, run_cfg.get("results_dir", "results"))
     run_dir = results_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    merge_results = bool(run_cfg.get("merge_results", False))
+    existing_run_record = None
+    existing_rows: list[dict[str, Any]] = []
+    if merge_results and (run_dir / "run.json").exists():
+        existing_run_record = _read_json(run_dir / "run.json")
+        existing_rows = _read_results_jsonl(run_dir / "results.jsonl")
 
     loader = LegalBenchRAGLoader(
         resolve_path(PROJECT_ROOT, data_cfg.get("data_dir", "data"))
@@ -165,6 +172,13 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         "examples": run_examples,
         "toc_trees": toc_trees,
     }
+    if existing_run_record is not None:
+        run_record, rows = _merge_run_records(
+            existing_run_record=existing_run_record,
+            current_run_record=run_record,
+            existing_rows=existing_rows,
+            current_rows=rows,
+        )
     with open(run_dir / "run.json", "w", encoding="utf-8") as f:
         json.dump(run_record, f, ensure_ascii=False, indent=2)
     with open(run_dir / "results.jsonl", "w", encoding="utf-8") as f:
@@ -231,7 +245,7 @@ def _run_method(
 
 
 def _aggregate(
-    rows: list[dict[str, Any]], setup_usage_by_method: dict[str, Usage]
+    rows: list[dict[str, Any]], setup_usage_by_method: dict[str, Any]
 ) -> dict[str, Any]:
     by_method: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -248,9 +262,9 @@ def _aggregate(
                 "mean_document_f1": 0.0,
                 "query_cost_usd": 0.0,
                 "query_answer_cost_usd": 0.0,
-                "setup_cost_usd": setup_usage_by_method.get(
-                    method, Usage()
-                ).estimated_cost_usd,
+                "setup_cost_usd": _setup_cost_usd(
+                    setup_usage_by_method.get(method)
+                ),
                 "total_cost_usd": 0.0,
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -302,6 +316,139 @@ def _aggregate(
     }
 
 
+def _setup_cost_usd(value: Any) -> float:
+    if isinstance(value, Usage):
+        return value.estimated_cost_usd
+    if isinstance(value, dict):
+        return float(value.get("estimated_cost_usd") or 0.0)
+    return 0.0
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    return data
+
+
+def _read_results_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _merge_run_records(
+    *,
+    existing_run_record: dict[str, Any],
+    current_run_record: dict[str, Any],
+    existing_rows: list[dict[str, Any]],
+    current_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows = _merge_rows(existing_rows, current_rows)
+    setup_costs = deepcopy(existing_run_record.get("setup_costs") or {})
+    setup_costs.update(deepcopy(current_run_record.get("setup_costs") or {}))
+    merged = deepcopy(existing_run_record)
+    merged["run_id"] = existing_run_record.get(
+        "run_id", current_run_record.get("run_id")
+    )
+    merged["config"] = _merge_run_config(
+        existing_run_record.get("config") or {},
+        current_run_record.get("config") or {},
+        rows,
+    )
+    merged["setup_costs"] = setup_costs
+    merged["aggregates"] = _aggregate(rows, setup_costs)
+    merged["examples"] = _merge_examples(
+        existing_run_record.get("examples") or [],
+        current_run_record.get("examples") or [],
+    )
+    merged["toc_trees"] = _merge_toc_trees(
+        existing_run_record.get("toc_trees") or [],
+        current_run_record.get("toc_trees") or [],
+    )
+    merged.setdefault("merged_at_utc", []).append(
+        current_run_record.get("started_at_utc")
+    )
+    return merged, rows
+
+
+def _merge_rows(
+    existing_rows: list[dict[str, Any]], current_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    rows_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
+    for row in [*existing_rows, *current_rows]:
+        key = (
+            str(row.get("benchmark") or ""),
+            str(row.get("example_id") or ""),
+            str(row.get("method") or ""),
+        )
+        if key not in rows_by_key:
+            order.append(key)
+        rows_by_key[key] = deepcopy(row)
+    return [rows_by_key[key] for key in order]
+
+
+def _merge_examples(
+    existing_examples: list[dict[str, Any]], current_examples: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    examples_by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for example in existing_examples:
+        example_id = str(example.get("id") or example.get("example_id") or "")
+        if example_id not in examples_by_id:
+            order.append(example_id)
+        examples_by_id[example_id] = deepcopy(example)
+    for example in current_examples:
+        example_id = str(example.get("id") or example.get("example_id") or "")
+        if example_id not in examples_by_id:
+            order.append(example_id)
+            examples_by_id[example_id] = deepcopy(example)
+            continue
+        merged = examples_by_id[example_id]
+        merged.setdefault("methods", {})
+        merged["methods"].update(deepcopy(example.get("methods") or {}))
+    return [examples_by_id[example_id] for example_id in order]
+
+
+def _merge_toc_trees(
+    existing_toc_trees: list[dict[str, Any]], current_toc_trees: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    current_methods = {
+        str(item.get("method") or "") for item in current_toc_trees if item.get("method")
+    }
+    kept_existing = [
+        deepcopy(item)
+        for item in existing_toc_trees
+        if str(item.get("method") or "") not in current_methods
+    ]
+    return [*kept_existing, *deepcopy(current_toc_trees)]
+
+
+def _merge_run_config(
+    existing_config: dict[str, Any],
+    current_config: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    merged_config = deepcopy(existing_config)
+    merged_config.setdefault("run", {})
+    methods = sorted({str(row.get("method") or "") for row in rows if row.get("method")})
+    merged_config["run"]["methods"] = methods
+    merged_config["run"]["merge_results"] = True
+    merged_config.setdefault("merged_configs", []).append(deepcopy(current_config))
+    return merged_config
+
+
 def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fieldnames = [
         "example_id",
@@ -346,6 +493,21 @@ def vector_variant_configs(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any
             variants.append((_unique_method_name(method_name, variants), variant_cfg))
         return variants
 
+    selected_profiles = _selected_model_profiles(vector_cfg)
+    if selected_profiles and not vector_cfg.get("evaluate_combinations", False):
+        base_cfg = _vector_base_config(vector_cfg)
+        variants = []
+        for profile in _filter_model_profiles(
+            vector_cfg.get("model_profiles") or [], selected_profiles
+        ):
+            profile_name = _slug(str(profile.get("name") or _model_profile_name(profile)))
+            profile_cfg = {key: value for key, value in profile.items() if key != "name"}
+            variant_cfg = deep_update(base_cfg, profile_cfg)
+            variants.append(
+                (_unique_method_name(f"vector_{profile_name}", variants), variant_cfg)
+            )
+        return variants
+
     if not vector_cfg.get("evaluate_combinations", False):
         return [("vector", vector_cfg)]
 
@@ -369,6 +531,8 @@ def vector_variant_configs(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any
             "reranker": vector_cfg.get("reranker", {}),
         }
     ]
+    if selected_profiles:
+        model_profiles = _filter_model_profiles(model_profiles, selected_profiles)
 
     variants: list[tuple[str, dict[str, Any]]] = []
     for profile in model_profiles:
@@ -398,8 +562,43 @@ def _vector_base_config(vector_cfg: dict[str, Any]) -> dict[str, Any]:
         "chunk_strategies",
         "search_strategies",
         "model_profiles",
+        "selected_model_profiles",
     }
     return {key: value for key, value in vector_cfg.items() if key not in excluded}
+
+
+def _selected_model_profiles(vector_cfg: dict[str, Any]) -> list[str]:
+    selected = vector_cfg.get("selected_model_profiles")
+    if selected is None:
+        selected = vector_cfg.get("model_profile")
+    if selected is None:
+        return []
+    if isinstance(selected, str):
+        return [part.strip() for part in selected.split(",") if part.strip()]
+    if isinstance(selected, list):
+        return [str(part).strip() for part in selected if str(part).strip()]
+    raise ValueError("vector_rag.selected_model_profiles must be a string or list")
+
+
+def _filter_model_profiles(
+    model_profiles: list[Any], selected_profiles: list[str]
+) -> list[dict[str, Any]]:
+    selected = {_slug(name) for name in selected_profiles}
+    matched: list[dict[str, Any]] = []
+    available: list[str] = []
+    for profile in model_profiles:
+        if not isinstance(profile, dict):
+            raise ValueError("vector_rag.model_profiles entries must be mappings")
+        name = str(profile.get("name") or _model_profile_name(profile))
+        available.append(name)
+        if _slug(name) in selected:
+            matched.append(profile)
+    if not matched:
+        raise ValueError(
+            "No vector_rag.model_profiles matched selected_model_profiles "
+            f"{selected_profiles}. Available profiles: {available}"
+        )
+    return matched
 
 
 def _model_profile_name(cfg: dict[str, Any]) -> str:

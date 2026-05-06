@@ -52,6 +52,19 @@ def main() -> None:
     )
     parser.add_argument("--force-reindex", action="store_true", help="Rebuild vector and PageIndex caches.")
     parser.add_argument("--run-id", help="Custom run id.")
+    parser.add_argument(
+        "--merge-results",
+        "--combine-results",
+        action="store_true",
+        help=(
+            "Merge this run's method results into an existing --run-id directory "
+            "instead of replacing the combined run record."
+        ),
+    )
+    parser.add_argument(
+        "--merge-into-run",
+        help="Existing run id or results path to merge this run into.",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -103,6 +116,14 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
         cfg["pageindex_official"]["force_reindex"] = True
     if args.run_id:
         cfg["run"]["run_id"] = args.run_id
+    if args.merge_into_run:
+        merge_target = Path(args.merge_into_run)
+        if str(merge_target.parent) != ".":
+            cfg["run"]["results_dir"] = str(merge_target.parent)
+        cfg["run"]["run_id"] = merge_target.name
+        cfg["run"]["merge_results"] = True
+    if args.merge_results:
+        cfg["run"]["merge_results"] = True
 
 
 if __name__ == "__main__":

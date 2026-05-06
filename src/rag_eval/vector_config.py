@@ -15,8 +15,22 @@ DEFAULT_VOYAGE_RERANKER_MODEL = "rerank-2.5"
 def add_vector_cli_args(parser: ArgumentParser) -> None:
     parser.add_argument("--chunk-strategy", choices=CHUNK_STRATEGIES)
     parser.add_argument("--search-strategy", choices=SEARCH_STRATEGIES)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Embedding batch size for vector RAG document and semantic chunk embeddings.",
+    )
     parser.add_argument("--top-k", type=int, help="Vector retrieval candidate top-k.")
     parser.add_argument("--rerank-top-k", type=int, help="Reranker output top-k.")
+    parser.add_argument(
+        "--model-profile",
+        "--model-profiles",
+        dest="model_profiles",
+        help=(
+            "Comma-separated vector_rag.model_profiles names to run "
+            "(for example: bge or voyage)."
+        ),
+    )
     parser.add_argument(
         "--embedding-provider",
         choices=MODEL_PROVIDERS,
@@ -77,6 +91,10 @@ def apply_vector_cli_overrides(vector_cfg: dict[str, Any], args: Namespace) -> N
         if vector_cfg.get("evaluate_combinations", False):
             vector_cfg["search_strategies"] = [search_strategy]
 
+    batch_size = getattr(args, "batch_size", None)
+    if batch_size is not None:
+        vector_cfg["batch_size"] = batch_size
+
     top_k = getattr(args, "top_k", None)
     if top_k is not None:
         vector_cfg["top_k"] = top_k
@@ -87,6 +105,10 @@ def apply_vector_cli_overrides(vector_cfg: dict[str, Any], args: Namespace) -> N
         for profile in vector_cfg.get("model_profiles") or []:
             if isinstance(profile, dict):
                 profile.setdefault("reranker", {})["top_k"] = rerank_top_k
+
+    model_profiles = getattr(args, "model_profiles", None)
+    if model_profiles:
+        vector_cfg["selected_model_profiles"] = _split_csv(model_profiles)
 
     _apply_model_override(vector_cfg, args)
 
@@ -100,6 +122,16 @@ def apply_vector_cli_overrides(vector_cfg: dict[str, Any], args: Namespace) -> N
                 getattr(args, "voyage_reranker_model", DEFAULT_VOYAGE_RERANKER_MODEL)
             ),
         )
+        selected_profiles = vector_cfg.get("selected_model_profiles")
+        if selected_profiles:
+            selected = (
+                _split_csv(selected_profiles)
+                if isinstance(selected_profiles, str)
+                else [str(profile) for profile in selected_profiles]
+            )
+            if all(profile.strip().lower() != "voyage" for profile in selected):
+                selected.append("voyage")
+            vector_cfg["selected_model_profiles"] = selected
 
 
 def _apply_model_override(vector_cfg: dict[str, Any], args: Namespace) -> None:
@@ -124,7 +156,9 @@ def _apply_model_override(vector_cfg: dict[str, Any], args: Namespace) -> None:
     if vector_cfg.get("evaluate_combinations", False) or vector_cfg.get(
         "model_profiles"
     ):
-        vector_cfg["model_profiles"] = [_base_model_profile(vector_cfg)]
+        base_profile = _base_model_profile(vector_cfg)
+        vector_cfg["model_profiles"] = [base_profile]
+        vector_cfg["selected_model_profiles"] = [str(base_profile["name"])]
 
 
 def _append_voyage_profile(
@@ -181,3 +215,7 @@ def _profile_name(provider: str, model: str) -> str:
     if "bge" in lowered:
         return "bge"
     return model.rsplit("/", 1)[-1] or provider
+
+
+def _split_csv(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]

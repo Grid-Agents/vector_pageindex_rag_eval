@@ -8,8 +8,10 @@ METHODS="pageindex_official"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
 SEARCH_STRATEGY=""
+BATCH_SIZE=""
 TOP_K=""
 RERANK_TOP_K=""
+MODEL_PROFILES=""
 EMBEDDING_PROVIDER=""
 EMBEDDING_MODEL=""
 RERANKER_PROVIDER=""
@@ -34,8 +36,11 @@ Options:
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, fixed, or semantic.
   --search-strategy NAME    vector or hybrid.
+  --batch-size N            Embedding batch size for vector RAG.
   --top-k N                 Vector retrieval candidate top-k.
   --rerank-top-k N          Reranker output top-k.
+  --model-profile NAME      Vector model profile from config to build.
+  --model-profiles LIST     Comma-separated vector model profiles from config to build.
   --embedding-provider NAME sentence_transformers or voyage.
   --embedding-model NAME    Embedding model for vector RAG.
   --reranker-provider NAME  sentence_transformers or voyage.
@@ -77,12 +82,20 @@ while [[ $# -gt 0 ]]; do
       SEARCH_STRATEGY="$2"
       shift 2
       ;;
+    --batch-size)
+      BATCH_SIZE="$2"
+      shift 2
+      ;;
     --top-k)
       TOP_K="$2"
       shift 2
       ;;
     --rerank-top-k)
       RERANK_TOP_K="$2"
+      shift 2
+      ;;
+    --model-profile|--model-profiles)
+      MODEL_PROFILES="$2"
       shift 2
       ;;
     --embedding-provider)
@@ -162,11 +175,17 @@ fi
 if [[ -n "$SEARCH_STRATEGY" ]]; then
   cmd+=(--search-strategy "$SEARCH_STRATEGY")
 fi
+if [[ -n "$BATCH_SIZE" ]]; then
+  cmd+=(--batch-size "$BATCH_SIZE")
+fi
 if [[ -n "$TOP_K" ]]; then
   cmd+=(--top-k "$TOP_K")
 fi
 if [[ -n "$RERANK_TOP_K" ]]; then
   cmd+=(--rerank-top-k "$RERANK_TOP_K")
+fi
+if [[ -n "$MODEL_PROFILES" ]]; then
+  cmd+=(--model-profiles "$MODEL_PROFILES")
 fi
 if [[ -n "$EMBEDDING_PROVIDER" ]]; then
   cmd+=(--embedding-provider "$EMBEDDING_PROVIDER")

@@ -4,6 +4,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+SPAN_TEXT_PREVIEW_CHARS = 1200
+ANSWER_PREVIEW_CHARS = 2000
+RAW_RESPONSE_PREVIEW_CHARS = 3000
+NODE_SUMMARY_PREVIEW_CHARS = 700
+REASON_PREVIEW_CHARS = 900
+CATALOG_PREVIEW_CHARS = 4000
+
 
 def generate_dashboard(results_dir: str | Path, output_path: str | Path) -> None:
     results_dir = Path(results_dir)
@@ -12,13 +19,235 @@ def generate_dashboard(results_dir: str | Path, output_path: str | Path) -> None
         with open(path, "r", encoding="utf-8") as f:
             run = json.load(f)
         run["run_dir"] = str(path.parent.relative_to(results_dir.parent))
-        runs.append(run)
+        runs.append(_public_run(run))
 
     html = HTML_TEMPLATE.replace("__RUNS_JSON__", json.dumps(runs, ensure_ascii=False))
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
+
+
+def _public_run(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": run.get("run_id"),
+        "started_at_utc": run.get("started_at_utc"),
+        "config": _public_config(run.get("config") or {}),
+        "setup_costs": run.get("setup_costs") or {},
+        "aggregates": run.get("aggregates") or {},
+        "examples": [_public_example(ex) for ex in run.get("examples") or []],
+        "toc_trees": [_public_toc_tree(item) for item in run.get("toc_trees") or []],
+        "merged_at_utc": run.get("merged_at_utc"),
+        "run_dir": run.get("run_dir"),
+    }
+
+
+def _public_config(config: dict[str, Any]) -> dict[str, Any]:
+    public = dict(config)
+    merged_configs = public.get("merged_configs")
+    if isinstance(merged_configs, list):
+        public["merged_configs"] = [
+            _public_config(item) if isinstance(item, dict) else item
+            for item in merged_configs
+        ]
+    return public
+
+
+def _public_example(example: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": example.get("id") or example.get("example_id"),
+        "benchmark": example.get("benchmark"),
+        "query": example.get("query"),
+        "gold_spans": [
+            _public_span(span, text_limit=SPAN_TEXT_PREVIEW_CHARS)
+            for span in example.get("gold_spans") or []
+        ],
+        "tags": example.get("tags") or [],
+        "methods": {
+            method: _public_result(result)
+            for method, result in (example.get("methods") or {}).items()
+        },
+    }
+
+
+def _public_result(result: dict[str, Any]) -> dict[str, Any]:
+    scalar_keys = (
+        "method",
+        "precision",
+        "recall",
+        "f1",
+        "gold_chars",
+        "retrieved_chars",
+        "overlap_chars",
+        "gold_document_count",
+        "retrieved_document_count",
+        "matched_document_count",
+        "document_precision",
+        "document_recall",
+        "document_f1",
+        "gold_span_count",
+        "retrieved_span_count",
+        "evaluation_target",
+        "answer_generated",
+        "wall_clock_seconds",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "estimated_cost_usd",
+        "error",
+    )
+    public = {key: result.get(key) for key in scalar_keys if key in result}
+    public["answer"] = _preview(result.get("answer"), ANSWER_PREVIEW_CHARS)
+    public["retrieved_spans"] = [
+        _public_span(span, text_limit=SPAN_TEXT_PREVIEW_CHARS)
+        for span in result.get("retrieved_spans") or []
+    ]
+    public["retrieval_metadata"] = _public_retrieval_metadata(
+        result.get("retrieval_metadata") or {}
+    )
+    trajectory = result.get("reasoning_trajectory")
+    if trajectory:
+        public["reasoning_trajectory"] = _public_reasoning_trajectory(trajectory)
+    return public
+
+
+def _public_span(span: dict[str, Any], *, text_limit: int) -> dict[str, Any]:
+    return {
+        "document_id": span.get("document_id"),
+        "start_char": span.get("start_char"),
+        "end_char": span.get("end_char"),
+        "score": span.get("score"),
+        "text": _preview(span.get("text"), text_limit),
+        "metadata": _public_span_metadata(span.get("metadata") or {}),
+    }
+
+
+def _public_span_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "node_id",
+        "node_title",
+        "chunk_title",
+        "section_title",
+        "reason",
+        "unit_start",
+        "unit_end",
+    )
+    return {
+        key: _preview(value, REASON_PREVIEW_CHARS) if isinstance(value, str) else value
+        for key, value in metadata.items()
+        if key in keep
+    }
+
+
+def _public_retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "document_selections",
+        "document_selection_raw",
+        "selection_raw",
+        "node_selection_raw_by_document",
+    )
+    public = {key: metadata.get(key) for key in keep if key in metadata}
+    if metadata.get("reasoning_trajectory"):
+        public["reasoning_trajectory"] = _public_reasoning_trajectory(
+            metadata["reasoning_trajectory"]
+        )
+    return _preview_nested(public)
+
+
+def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
+    public = {
+        "query": trajectory.get("query"),
+        "document_selection": _preview_nested(trajectory.get("document_selection") or {}),
+        "document_walks": [
+            _public_document_walk(walk)
+            for walk in trajectory.get("document_walks") or []
+        ],
+        "retrieved_nodes": [
+            _preview_nested(node) for node in trajectory.get("retrieved_nodes") or []
+        ],
+        "errors": trajectory.get("errors") or [],
+    }
+    return public
+
+
+def _public_document_walk(walk: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "document_id": walk.get("document_id"),
+        "source": walk.get("source"),
+        "document_reason": _preview(walk.get("document_reason"), REASON_PREVIEW_CHARS),
+        "error": walk.get("error"),
+        "final_selections": _preview_nested(walk.get("final_selections") or []),
+        "steps": [_public_trace_step(step) for step in walk.get("steps") or []],
+    }
+
+
+def _public_trace_step(step: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "step",
+        "current_node",
+        "node_id",
+        "unit_start",
+        "unit_end",
+        "selection_source",
+        "fallback_reason",
+        "candidate_child_count",
+        "child_count",
+        "prompt_child_list_truncated",
+        "accepted_selections",
+        "llm_selections",
+    )
+    public = {key: step.get(key) for key in keep if key in step}
+    public["candidate_children"] = [
+        _public_toc_node(child) for child in step.get("candidate_children") or []
+    ]
+    raw = step.get("raw_response") or step.get("selection_raw")
+    if raw:
+        public["raw_response"] = _preview_nested(raw)
+    return public
+
+
+def _public_toc_tree(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "method": item.get("method"),
+        "document_id": item.get("document_id"),
+        "tree": _public_toc_node(item.get("tree") or {}),
+    }
+
+
+def _public_toc_node(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "node_id": node.get("node_id"),
+        "title": _preview(node.get("title"), NODE_SUMMARY_PREVIEW_CHARS),
+        "summary": _preview(node.get("summary"), NODE_SUMMARY_PREVIEW_CHARS),
+        "start_char": node.get("start_char"),
+        "end_char": node.get("end_char"),
+        "unit_start": node.get("unit_start"),
+        "unit_end": node.get("unit_end"),
+        "token_count": node.get("token_count"),
+        "node_kind": node.get("node_kind"),
+        "section_title": _preview(node.get("section_title"), NODE_SUMMARY_PREVIEW_CHARS),
+        "children": [_public_toc_node(child) for child in node.get("children") or []],
+    }
+
+
+def _preview_nested(value: Any) -> Any:
+    if isinstance(value, str):
+        return _preview(value, RAW_RESPONSE_PREVIEW_CHARS)
+    if isinstance(value, list):
+        return [_preview_nested(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _preview_nested(item) for key, item in value.items()}
+    return value
+
+
+def _preview(value: Any, limit: int) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n...[truncated {len(text) - limit} chars]"
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
