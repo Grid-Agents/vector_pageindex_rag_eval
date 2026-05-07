@@ -95,6 +95,8 @@ def _public_result(result: dict[str, Any]) -> dict[str, Any]:
         "cache_read_input_tokens",
         "cache_creation_input_tokens",
         "estimated_cost_usd",
+        "rlm_turn_count",
+        "rlm_lm_call_count",
         "error",
     )
     public = {key: result.get(key) for key in scalar_keys if key in result}
@@ -125,11 +127,14 @@ def _public_span(span: dict[str, Any], *, text_limit: int) -> dict[str, Any]:
 
 def _public_span_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     keep = (
+        "retriever",
+        "rank",
         "node_id",
         "node_title",
         "chunk_title",
         "section_title",
         "reason",
+        "rlm_reason",
         "unit_start",
         "unit_end",
     )
@@ -146,6 +151,12 @@ def _public_retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "document_selection_raw",
         "selection_raw",
         "node_selection_raw_by_document",
+        "rlm_backend",
+        "rlm_model",
+        "rlm_turn_count",
+        "rlm_lm_call_count",
+        "rlm_final_response",
+        "rlm_usage_summary",
     )
     public = {key: metadata.get(key) for key in keep if key in metadata}
     if metadata.get("reasoning_trajectory"):
@@ -156,6 +167,8 @@ def _public_retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
+    if trajectory.get("type") == "rlm":
+        return _public_rlm_reasoning_trajectory(trajectory)
     public = {
         "query": trajectory.get("query"),
         "document_selection": _preview_nested(trajectory.get("document_selection") or {}),
@@ -169,6 +182,55 @@ def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
         "errors": trajectory.get("errors") or [],
     }
     return public
+
+
+def _public_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "rlm",
+        "query": trajectory.get("query"),
+        "turn_count": trajectory.get("turn_count"),
+        "llm_call_count": trajectory.get("llm_call_count"),
+        "final_response": _preview(
+            trajectory.get("final_response"), RAW_RESPONSE_PREVIEW_CHARS
+        ),
+        "run_metadata": _preview_nested(trajectory.get("run_metadata") or {}),
+        "usage_summary": _preview_nested(trajectory.get("usage_summary") or {}),
+        "iterations": [
+            _public_rlm_iteration(item)
+            for item in trajectory.get("iterations") or []
+        ],
+        "retrieved_spans": [
+            _preview_nested(span)
+            for span in trajectory.get("retrieved_spans") or []
+        ],
+        "errors": trajectory.get("errors") or [],
+    }
+
+
+def _public_rlm_iteration(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "turn": item.get("turn"),
+        "timestamp": item.get("timestamp"),
+        "llm_output": _preview(item.get("llm_output"), RAW_RESPONSE_PREVIEW_CHARS),
+        "final_answer": _preview(item.get("final_answer"), RAW_RESPONSE_PREVIEW_CHARS),
+        "iteration_time": item.get("iteration_time"),
+        "code_blocks": [
+            {
+                "block": block.get("block"),
+                "code": _preview(block.get("code"), RAW_RESPONSE_PREVIEW_CHARS),
+                "stdout": _preview(block.get("stdout"), RAW_RESPONSE_PREVIEW_CHARS),
+                "stderr": _preview(block.get("stderr"), RAW_RESPONSE_PREVIEW_CHARS),
+                "final_answer": _preview(
+                    block.get("final_answer"), RAW_RESPONSE_PREVIEW_CHARS
+                ),
+                "rlm_call_count": block.get("rlm_call_count"),
+                "rlm_calls": [
+                    _preview_nested(call) for call in block.get("rlm_calls") or []
+                ],
+            }
+            for block in item.get("code_blocks") or []
+        ],
+    }
 
 
 def _public_document_walk(walk: dict[str, Any]) -> dict[str, Any]:
@@ -292,6 +354,7 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .method.vector { border-left-color: #2f80ed; }
 .method.pageindex { border-left-color: #8a5cf6; }
 .method.pageindex_official { border-left-color: #00a884; }
+.method.rlm { border-left-color: #d66f00; }
 .query { padding: 10px; background: #fafafa; border: 1px solid #eee; border-radius: 6px; white-space: pre-wrap; }
 .answer { margin: 8px 0; padding: 9px; background: #fafafa; border-left: 3px solid #c7c7c0; white-space: pre-wrap; }
 .span { margin-top: 8px; border: 1px solid #deded8; border-radius: 6px; overflow: hidden; }
@@ -319,6 +382,8 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .candidate { border: 1px solid #e5e5df; border-radius: 6px; padding: 7px 8px; background: #fafafa; }
 .candidate.selected { border-color: #8a5cf6; background: #f5f1ff; }
 .reason { color: #444; font-size: 12px; margin-top: 3px; }
+.rlm-trace { margin: 10px 0 12px; border: 1px solid #e5e5df; border-radius: 6px; padding: 8px; background: #fffaf2; }
+.rlm-trace > summary { font-weight: 650; color: #6d3900; }
 details { margin-top: 8px; }
 summary { cursor: pointer; color: #555; font-size: 12px; }
 pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 8px; max-height: 280px; overflow: auto; font-size: 12px; }
@@ -470,6 +535,8 @@ function hydrateRun(run) {
         wall_clock_seconds: Number(result.wall_clock_seconds) || 0,
         input_tokens: Number(result.input_tokens) || 0,
         output_tokens: Number(result.output_tokens) || 0,
+        rlm_turn_count: result.rlm_turn_count == null ? null : Number(result.rlm_turn_count),
+        rlm_lm_call_count: result.rlm_lm_call_count == null ? null : Number(result.rlm_lm_call_count),
         error: result.error || "",
       });
     }
@@ -571,7 +638,7 @@ function renderRun(idx) {
 
 function renderOverview() {
   const agg = currentRun.aggregates || {};
-  const reasoningCount = pageindexReasoningItems().length;
+  const reasoningCount = reasoningTraceCount();
   const rows = Object.entries(agg.by_method || {}).map(([method, s]) => `
     <tr>
       <td><span class="badge">${esc(method)}</span></td>
@@ -647,6 +714,7 @@ function methodPanel(method, result) {
   const answerBlock = result.answer
     ? `<h2>Generated Answer Diagnostic</h2><div class="answer">${esc(result.answer)}</div>`
     : "";
+  const rlmTraceBlock = renderRlmTraceBlock(result);
   return `<div class="panel method ${esc(method)}">
     <h3><span class="badge">${esc(method)}</span> <span class="badge ${f1Class(result.f1)}">Span F1 ${fmt(result.f1)}</span></h3>
     <div class="badges">
@@ -663,9 +731,12 @@ function methodPanel(method, result) {
       <span class="badge">${fmt(result.wall_clock_seconds, 1)}s</span>
       <span class="badge">in ${esc(result.input_tokens || 0)}</span>
       <span class="badge">out ${esc(result.output_tokens || 0)}</span>
+      ${result.rlm_turn_count != null ? `<span class="badge">RLM turns ${esc(result.rlm_turn_count)}</span>` : ""}
+      ${result.rlm_lm_call_count != null ? `<span class="badge">RLM calls ${esc(result.rlm_lm_call_count)}</span>` : ""}
     </div>
     ${result.error ? `<p class="err">${esc(result.error)}</p>` : ""}
     ${answerBlock}
+    ${rlmTraceBlock}
     <h2>Retrieved Spans</h2>
     ${spans || `<div class="empty">No retrieved spans</div>`}
   </div>`;
@@ -677,9 +748,81 @@ function spanBlock(span) {
     <div class="span-meta">${esc(span.document_id)} [${esc(span.start_char)}:${esc(span.end_char)}] score=${fmt(span.score)}
       ${meta.node_id ? ` · node=${esc(meta.node_id)}` : ""}
       ${meta.chunk_title ? ` · ${esc(meta.chunk_title)}` : ""}
+      ${meta.reason ? ` · reason=${esc(String(meta.reason).slice(0, 120))}` : ""}
     </div>
     <div class="span-text">${esc(span.text)}</div>
   </div>`;
+}
+
+function resultTrajectory(result) {
+  const metadata = result.retrieval_metadata || {};
+  return result.reasoning_trajectory || metadata.reasoning_trajectory || null;
+}
+
+function rlmTrajectory(result) {
+  const trajectory = resultTrajectory(result);
+  if (!trajectory) return null;
+  if (trajectory.type === "rlm" || Array.isArray(trajectory.iterations)) return trajectory;
+  return null;
+}
+
+function renderRlmTraceBlock(result) {
+  const trajectory = rlmTrajectory(result);
+  if (!trajectory) return "";
+  const turns = trajectory.iterations || [];
+  const turnCount = trajectory.turn_count != null ? trajectory.turn_count : turns.length;
+  const llmCalls = trajectory.llm_call_count != null ? trajectory.llm_call_count : "";
+  const retrieved = (trajectory.retrieved_spans || []).map(span => `
+    <div class="candidate selected">
+      <div class="node-title">${esc(span.document_id)} [${esc(span.start_char)}:${esc(span.end_char)}]</div>
+      <div class="node-id">score=${fmt(span.score)}</div>
+      ${span.reason ? `<div class="reason">${esc(span.reason)}</div>` : ""}
+    </div>`).join("");
+  const turnBlocks = turns.map(renderRlmTurn).join("");
+  return `<details class="rlm-trace">
+    <summary>RLM reasoning trajectory (${esc(turnCount)} turns)</summary>
+    <div class="badges">
+      <span class="badge">turns ${esc(turnCount)}</span>
+      ${llmCalls !== "" ? `<span class="badge">LLM calls ${esc(llmCalls)}</span>` : ""}
+    </div>
+    ${trajectory.final_response ? jsonDetails("Final RLM response", trajectory.final_response) : ""}
+    <h2>Turn Outputs</h2>
+    ${turnBlocks || `<div class="empty">No RLM turns recorded.</div>`}
+    <h2>RLM Retrieved Spans</h2>
+    <div class="candidate-list">${retrieved || `<div class="empty">No retrieved spans recorded in trajectory.</div>`}</div>
+  </details>`;
+}
+
+function renderRlmTurn(turn) {
+  const codeBlocks = (turn.code_blocks || []).map(block => {
+    const body = [
+      block.code ? `# code\n${block.code}` : "",
+      block.stdout ? `# stdout\n${block.stdout}` : "",
+      block.stderr ? `# stderr\n${block.stderr}` : "",
+      block.final_answer ? `# final_answer\n${block.final_answer}` : "",
+    ].filter(Boolean).join("\n\n");
+    return body ? jsonDetails(`REPL block ${block.block || ""}`, body) : "";
+  }).join("");
+  return `<div class="trace-step">
+    <div class="trace-title">Turn ${esc(turn.turn || "")}</div>
+    <div class="badges">
+      ${turn.iteration_time != null ? `<span class="badge">${fmt(turn.iteration_time, 2)}s</span>` : ""}
+      ${turn.final_answer ? `<span class="badge good">final</span>` : ""}
+    </div>
+    <pre>${esc(turn.llm_output || "")}</pre>
+    ${turn.final_answer ? jsonDetails("Turn final answer", turn.final_answer) : ""}
+    ${codeBlocks}
+  </div>`;
+}
+
+function reasoningTraceCount() {
+  let count = 0;
+  (currentRun?.examples || []).forEach(ex => {
+    Object.entries(ex.methods || {}).forEach(([_method, result]) => {
+      if (rlmTrajectory(result) || pageindexTrajectory(result)) count += 1;
+    });
+  });
+  return count;
 }
 
 function pageindexReasoningItems() {

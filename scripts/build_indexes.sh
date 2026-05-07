@@ -32,7 +32,7 @@ Options:
   --benchmark NAME          Benchmark to build. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Sample size for sampled scope only.
-  --methods LIST            Comma-separated methods: pageindex,vector,pageindex_official. Default: pageindex.
+  --methods LIST            Comma-separated methods: pageindex,vector,pageindex_official,rlm. Default: pageindex_official.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, fixed, or semantic.
   --search-strategy NAME    vector or hybrid.

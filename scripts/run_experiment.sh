@@ -3,9 +3,8 @@ set -euo pipefail
 
 CONFIG="configs/default.yaml"
 BENCHMARKS="cuad"
-N="10"
-# METHODS="vector,pageindex,pageindex_official"
-METHODS="vector"
+N="20"
+METHODS="vector,pageindex_official,rlm"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
 SEARCH_STRATEGY=""
@@ -24,7 +23,7 @@ VOYAGE_EMBEDDING_MODEL=""
 VOYAGE_RERANKER_MODEL=""
 RUN_ID=""
 MERGE_RESULTS="false"
-MERGE_INTO_RUN="results/20260505T172718Z"
+MERGE_INTO_RUN=""
 RETRIEVAL_ONLY="false"
 ANSWER_WITH_LLM="false"
 FORCE_REINDEX="false"
@@ -39,7 +38,7 @@ Options:
   --benchmark NAME          Benchmark to run. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Number of examples. Default: 10.
-  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official. Default: vector,pageindex.
+  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official,rlm. Default: vector.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, fixed, or semantic.
   --search-strategy NAME    vector or hybrid.
@@ -60,9 +59,9 @@ Options:
   --answer-with-llm         Generate qualitative answers after retrieval. Saved as diagnostics only.
   --retrieval-only          Skip answer generation. Default and recommended for document metrics.
   --record-reasoning-trajectory
-                            Save PageIndex document and ToC node selection traces. Default.
+                            Save PageIndex traces and RLM turn trajectories. Default.
   --no-record-reasoning-trajectory
-                            Disable PageIndex reasoning trace recording.
+                            Disable PageIndex/RLM reasoning trace recording.
   --force-reindex           Rebuild PageIndex ToC cache.
   --run-id ID               Custom run id.
   --merge-results           Merge this run into an existing --run-id directory.
@@ -202,6 +201,24 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ ",$METHODS," == *",rlm,"* ]]; then
+  python_version="$(uv run python --version 2>&1 || true)"
+  if [[ "$python_version" =~ Python\ 3\.10\. ]] || [[ "$python_version" =~ Python\ 3\.9\. ]] || [[ "$python_version" =~ Python\ 3\.[0-9]\. ]]; then
+    cat <<EOF 1>&2
+RLM requires Python 3.11+ via the official \`rlms\` package, but this workspace is using:
+  $python_version
+
+Fix:
+  1. Install Python 3.11 or newer.
+  2. Recreate/sync the environment with that interpreter:
+       uv venv --python 3.11
+       uv sync --dev --extra rlm
+  3. Re-run this script.
+EOF
+    exit 1
+  fi
+fi
 
 cmd=(
   uv run python run_experiment.py

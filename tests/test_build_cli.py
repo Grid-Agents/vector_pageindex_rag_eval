@@ -46,3 +46,9 @@ def test_build_cli_resolve_methods_accepts_official_pageindex():
     cfg = {"run": {"methods": ["vector", "pageindex_official"]}}
 
     assert _resolve_methods(cfg) == ["vector", "pageindex_official"]
+
+
+def test_build_cli_resolve_methods_accepts_rlm():
+    cfg = {"run": {"methods": ["rlm"]}}
+
+    assert _resolve_methods(cfg) == ["rlm"]

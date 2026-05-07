@@ -72,8 +72,11 @@ class LegalBenchRAGLoader:
                 )
 
         rng = random.Random(seed)
-        rng.shuffle(examples)
-        return examples[:n] if n is not None else examples
+        if n is None:
+            return examples
+        if n > len(examples):
+            raise ValueError(f"requested n={n} but only {len(examples)} examples available")
+        return rng.sample(examples, n)
 
     def load_documents(
         self,

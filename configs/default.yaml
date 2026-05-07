@@ -7,7 +7,7 @@ data:
 llm:
   provider: anthropic
   api_key_env: ANTHROPIC_API_KEY
-  model: claude-haiku-4-5-20251001
+  model: claude-sonnet-4-6
   max_tokens: 700
   temperature: 0.0
   pricing:
@@ -113,13 +113,35 @@ pageindex_official:
   reasoning_max_node_summary_chars: 320
   reasoning_max_trace_nodes: 250
 
+rlm:
+  # Uses the official alexzhang13/rlm package. Install from the official repo
+  # before adding "rlm" to run.methods:
+  #   uv pip install 'rlms @ git+https://github.com/alexzhang13/rlm.git'
+  backend: anthropic
+  api_key_env: ANTHROPIC_API_KEY
+  # Keep RLM on the same model/tuning used in rlm-eval for apples-to-apples runs.
+  model_name: claude-sonnet-4-6
+  environment: local
+  max_depth: 1
+  max_iterations: 20
+  max_timeout: 180
+  backend_max_tokens: 2048
+  selected_spans: 5
+  max_retrieved_chars_per_span: 5000
+  catalog_preview_chars: 240
+  max_search_terms: 12
+  max_tool_results: 50
+  max_tool_window_chars: 2500
+  max_hits_per_term_per_document: 30
+  record_reasoning_trajectory: true
+
 run:
   results_dir: results
   # Set run_id plus merge_results: true to append/replace methods in an existing run folder.
   # run_id: 20260505T172718Z
   merge_results: false
-  # Add "pageindex_official" to compare against VectifyAI's official implementation.
-  methods: ["vector", "pageindex", "pageindex_official"]
+  # Add "rlm" to compare against the official Recursive Language Model retriever.
+  methods: ["vector", "pageindex", "pageindex_official", "rlm"]
   n: 10
   seed: 42
   # Retrieval metrics are scored against benchmark snippets, not generated answers.

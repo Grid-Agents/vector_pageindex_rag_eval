@@ -55,7 +55,7 @@ That character span is important: the benchmark does not only say which document
 
 ## 2. RAG Systems Compared
 
-The repo compares three retrieval approaches. They all return the same output shape: a list of retrieved document spans with document ID, character offsets, text, score, and metadata.
+The repo compares four retrieval approaches. They all return the same output shape: a list of retrieved document spans with document ID, character offsets, text, score, and metadata.
 
 ### Vector RAG
 
@@ -93,6 +93,12 @@ This approach spends more work during indexing because it can ask Claude to summ
 `pageindex_official` adapts VectifyAI's official self-hosted PageIndex implementation to LegalBench-RAG's plain-text corpus. The adapter converts each text document into Markdown with section and virtual-page headings, builds the official PageIndex tree, and uses the official LLM tree-search pattern to retrieve nodes.
 
 This gives a closer comparison against the upstream PageIndex approach while keeping the same benchmark and scoring pipeline.
+
+### RLM Adapter
+
+`rlm` adapts the official `alexzhang13/rlm` Recursive Language Model package. It gives the RLM REPL tools to list, search, and read LegalBench source documents, then requires a final JSON response with exact `document_id`, `start_char`, and `end_char` span selections.
+
+When enabled, the runner stores the RLM turn count, final output, and each official RLM iteration's LLM output plus REPL code/stdout/stderr. The dashboard shows this under each RLM question result as a collapsed reasoning trajectory.
 
 ## 3. Evaluation Pipeline
 

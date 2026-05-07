@@ -1,4 +1,5 @@
 import json
+import random
 
 from rag_eval.data import LegalBenchRAGLoader
 
@@ -79,3 +80,31 @@ def test_legalbench_loader_reads_all_docs_for_selected_benchmarks_only(tmp_path)
         "cuad/contract_b.txt",
     ]
     assert examples[0].gold_spans[0].text == "cde"
+
+
+def test_legalbench_loader_sampling_matches_random_sample(tmp_path):
+    data_dir = tmp_path / "data"
+    corpus_dir = data_dir / "corpus"
+    bench_dir = data_dir / "benchmarks"
+    corpus_dir.mkdir(parents=True)
+    bench_dir.mkdir(parents=True)
+    (corpus_dir / "contract.txt").write_text("abcdefghij", encoding="utf-8")
+    tests = []
+    for idx in range(4):
+        tests.append(
+            {
+                "id": f"cuad:{idx}",
+                "query": f"Question {idx}",
+                "snippets": [{"file_path": "contract.txt", "span": [0, 1]}],
+            }
+        )
+    (bench_dir / "cuad.json").write_text(
+        json.dumps({"tests": tests}),
+        encoding="utf-8",
+    )
+
+    loader = LegalBenchRAGLoader(data_dir)
+    examples = loader.load_examples(["cuad"], n=2, seed=7)
+
+    expected = random.Random(7).sample([test["id"] for test in tests], 2)
+    assert [example.example_id for example in examples] == expected

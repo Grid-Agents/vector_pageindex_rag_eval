@@ -5,6 +5,7 @@ This repo runs small or full LegalBench-RAG experiments comparing:
 - `vector`: evaluates chunking/search variants by default, using local sentence-transformer embeddings and the open-source `BAAI/bge-reranker-v2-m3` reranker unless another model profile is selected.
 - `pageindex`: a PageIndex-style semantic table-of-contents tree built over virtual pages, with Claude semanticizing every page/span at build time and then traversing the tree to page nodes at query time.
 - `pageindex_official`: an adapter around VectifyAI's official self-hosted PageIndex repo. LegalBench-RAG documents are plain text, so the adapter converts each document into Markdown with section and virtual-page headings, calls the official `md_to_tree` implementation, then runs the official LLM tree-search pattern over the generated tree.
+- `rlm`: an adapter around the official `alexzhang13/rlm` Recursive Language Model package. It now mirrors `rlm-eval`'s contract: RLM receives direct REPL access to the full `{document_id: text}` corpus, a `make_span(document_id, snippet)` helper for exact offsets, optional browse/search helper tools, and tolerant parsing of mixed prose / Python-literal final outputs.
 
 The runner records retrieved spans, exact character-overlap retrieval metrics, document-level retrieval metrics, token usage, and estimated Claude cost in USD. Generated answers are optional and are not scored.
 
@@ -17,6 +18,15 @@ cp .env.example .env
 export ANTHROPIC_API_KEY=your_claude_api_key_here
 # Optional, only needed when using --include-voyage or Voyage configs.
 export VOYAGE_API_KEY=your_voyage_api_key_here
+```
+
+RLM support uses the official repo package and currently requires a Python version
+compatible with that package:
+
+```bash
+uv sync --dev --extra rlm
+# or install directly into the active environment:
+uv pip install 'rlms @ git+https://github.com/alexzhang13/rlm.git'
 ```
 
 Download LegalBench-RAG into `data/` with:
@@ -108,6 +118,15 @@ scripts/run_experiment.sh \
   --methods vector,pageindex,pageindex_official
 ```
 
+Run RLM as another retrieval method:
+
+```bash
+scripts/run_experiment.sh \
+  --benchmark cuad \
+  --n 5 \
+  --methods vector,rlm
+```
+
 Runs are retrieval-only by default. Pass `--answer-with-llm` only when you want qualitative answers saved alongside the retrieval results; those answers are not part of precision, recall, or F1.
 
 If you only want to warm caches without running retrieval, use the build-only script:
@@ -138,11 +157,11 @@ results/<run_id>/summary.csv
 results/visualization.html
 ```
 
-Open `results/visualization.html` to inspect run-level retrieval metrics, per-question gold snippets, retrieved spans, PageIndex reasoning traces, and PageIndex ToC trees for both the self-implemented and official methods.
+Open `results/visualization.html` to inspect run-level retrieval metrics, per-question gold snippets, retrieved spans, PageIndex reasoning traces, PageIndex ToC trees, and collapsed RLM turn trajectories under each RLM question result.
 
 ## Config
 
-Edit `configs/default.yaml` for model and pipeline settings. Claude defaults to `claude-sonnet-4-6` with the current public API price class of `$3/M` input tokens and `$15/M` output tokens. If Anthropic changes pricing or you use a different Claude model, update `llm.pricing`.
+Edit `configs/default.yaml` for model and pipeline settings. The shared PageIndex LLM config currently defaults to `claude-haiku-4-5-20251001`; the RLM adapter defaults to `claude-sonnet-4-6` with `max_depth: 1`, `max_iterations: 20`, and `backend_max_tokens: 2048` to match `rlm-eval`. If Anthropic changes pricing or you use a different Claude model, update `llm.pricing`.
 
 Vector RAG settings:
 
@@ -178,6 +197,16 @@ Official PageIndex settings:
 - `virtual_page_target_tokens` / `virtual_page_max_tokens`: virtual page size used when converting LegalBench text into Markdown for the official Markdown implementation
 - `if_add_node_summary` / `if_add_doc_description`: official `md_to_tree` summary and document-description options
 - `selected_documents`, `selected_nodes`, `max_tree_chars`, `max_retrieved_chars_per_node`, `record_reasoning_trajectory`: query-time retrieval and trace settings, matching the existing PageIndex method
+
+RLM settings:
+
+- `backend`, `model_name`, `api_key_env`, `backend_kwargs`: official RLM model backend configuration
+- `environment`: official RLM REPL environment, defaulting to `local`
+- `max_iterations`, `max_depth`, `max_timeout`: RLM loop controls
+- `backend_max_tokens`: backend response cap used for Anthropic runs when `backend_kwargs.max_tokens` is unset
+- `selected_spans`, `max_retrieved_chars_per_span`: output span limits for this evaluator
+- `record_reasoning_trajectory`: save turn count plus each RLM iteration's LLM output and REPL block output in `run.json` and the dashboard
+- RLM sampling now uses the same `random.sample(seed)` behavior as `rlm-eval`, so `seed/n` subsets line up across the two repos
 
 ## Metrics
 

@@ -24,7 +24,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--methods",
-        help="Comma-separated methods: vector,pageindex,pageindex_official.",
+        help="Comma-separated methods: vector,pageindex,pageindex_official,rlm.",
     )
     parser.add_argument("--n", type=int, help="Number of examples to run.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
@@ -43,12 +43,12 @@ def main() -> None:
     parser.add_argument(
         "--record-reasoning-trajectory",
         action="store_true",
-        help="Record PageIndex document and ToC node selection traces.",
+        help="Record PageIndex traces and RLM turn trajectories.",
     )
     parser.add_argument(
         "--no-record-reasoning-trajectory",
         action="store_true",
-        help="Disable PageIndex reasoning trace recording.",
+        help="Disable PageIndex/RLM reasoning trace recording.",
     )
     parser.add_argument("--force-reindex", action="store_true", help="Rebuild vector and PageIndex caches.")
     parser.add_argument("--run-id", help="Custom run id.")
@@ -84,6 +84,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     cfg.setdefault("vector_rag", {}).setdefault("reranker", {})
     cfg.setdefault("pageindex", {})
     cfg.setdefault("pageindex_official", {})
+    cfg.setdefault("rlm", {})
 
     if args.data_dir:
         cfg["data"]["data_dir"] = args.data_dir
@@ -107,9 +108,11 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     if args.record_reasoning_trajectory:
         cfg["pageindex"]["record_reasoning_trajectory"] = True
         cfg["pageindex_official"]["record_reasoning_trajectory"] = True
+        cfg["rlm"]["record_reasoning_trajectory"] = True
     if args.no_record_reasoning_trajectory:
         cfg["pageindex"]["record_reasoning_trajectory"] = False
         cfg["pageindex_official"]["record_reasoning_trajectory"] = False
+        cfg["rlm"]["record_reasoning_trajectory"] = False
     if args.force_reindex:
         cfg["vector_rag"]["force_reindex"] = True
         cfg["pageindex"]["force_reindex"] = True

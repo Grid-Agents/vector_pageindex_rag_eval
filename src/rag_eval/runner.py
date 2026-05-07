@@ -15,6 +15,7 @@ from .llm import AnthropicLLM
 from .metrics import score_retrieval
 from .official_pageindex import OfficialPageIndexRAG
 from .pageindex_rag import PageIndexRAG
+from .rlm_rag import RLMRAG
 from .types import Example, RetrievalOutput, Usage
 from .vector_rag import VectorRAG
 from .visualization import generate_dashboard
@@ -53,7 +54,9 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     )
 
     methods = [name.lower() for name in run_cfg.get("methods", ["vector", "pageindex"])]
-    unknown_methods = sorted(set(methods) - {"vector", "pageindex", "pageindex_official"})
+    unknown_methods = sorted(
+        set(methods) - {"vector", "pageindex", "pageindex_official", "rlm"}
+    )
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
     llm = None
@@ -106,6 +109,13 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         official_pageindex.build(documents)
         systems["pageindex_official"] = official_pageindex
         setup_usage_by_method["pageindex_official"] = official_pageindex.setup_usage
+    if "rlm" in methods:
+        rlm_cfg = cfg.get("rlm", {})
+        rlm = RLMRAG(rlm_cfg, llm_cfg=cfg.get("llm", {}))
+        print(f"Preparing RLM retriever for {len(documents)} documents...")
+        rlm.build(documents)
+        systems["rlm"] = rlm
+        setup_usage_by_method["rlm"] = Usage()
 
     run_examples = []
     rows = []
@@ -148,6 +158,8 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
                             "estimated_cost_usd",
                             "input_tokens",
                             "output_tokens",
+                            "rlm_turn_count",
+                            "rlm_lm_call_count",
                             "error",
                         )
                     },
@@ -240,6 +252,8 @@ def _run_method(
         "cache_read_input_tokens": usage.cache_read_input_tokens,
         "cache_creation_input_tokens": usage.cache_creation_input_tokens,
         "estimated_cost_usd": usage.estimated_cost_usd,
+        "rlm_turn_count": retrieval.metadata.get("rlm_turn_count"),
+        "rlm_lm_call_count": retrieval.metadata.get("rlm_lm_call_count"),
         "error": error,
     }
 
@@ -469,6 +483,8 @@ def _write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "estimated_cost_usd",
         "input_tokens",
         "output_tokens",
+        "rlm_turn_count",
+        "rlm_lm_call_count",
         "error",
     ]
     with open(path, "w", encoding="utf-8", newline="") as f:

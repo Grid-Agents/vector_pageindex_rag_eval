@@ -5,8 +5,9 @@ This repo compares retrieval pipelines over LegalBench-RAG text files:
 - `vector`: chunk text, embed chunks, search by dense vector or hybrid BM25+dense scores, then optionally rerank.
 - `pageindex`: build a semantic table-of-contents tree per document, then ask an LLM to navigate the tree and select relevant nodes.
 - `pageindex_official`: convert LegalBench text into Markdown, build the tree with VectifyAI's official self-hosted PageIndex Markdown implementation, then use the official LLM tree-search pattern to select nodes.
+- `rlm`: call the official `alexzhang13/rlm` Recursive Language Model package with REPL tools for searching and reading the loaded LegalBench corpus, then parse the RLM's final JSON span selections.
 
-Both implementations return the same `RetrievalOutput` shape: a list of `RetrievedSpan` objects with `document_id`, exact character offsets, retrieved text, score, and retriever metadata. The runner scores retrieval with character-level overlap against LegalBench-RAG gold spans, plus document-level hit metrics. Optional generated answers are saved only for qualitative review.
+All implementations return the same `RetrievalOutput` shape: a list of `RetrievedSpan` objects with `document_id`, exact character offsets, retrieved text, score, and retriever metadata. The runner scores retrieval with character-level overlap against LegalBench-RAG gold spans, plus document-level hit metrics. Optional generated answers are saved only for qualitative review.
 
 ## Shared Data Flow
 
@@ -369,6 +370,67 @@ Vector RAG retrieves by embedding similarity at chunk granularity. It is fast af
 PageIndex retrieves by LLM navigation over document structure. It can choose larger semantic regions and use summaries/titles rather than only dense similarity. It has two LLM-dependent phases: optional build-time semanticization and query-time node selection. Caching is important because build-time semanticization can be expensive on large corpora.
 
 Official PageIndex uses the same runner contract but a different tree builder. `OfficialPageIndexRAG` lives under `src/rag_eval/official_pageindex`, auto-loads or clones `https://github.com/VectifyAI/PageIndex`, and calls the upstream `md_to_tree` function. Since LegalBench-RAG documents are text files rather than PDFs, it first emits Markdown headings for detected sections and virtual pages so the upstream Markdown parser can build a hierarchy. Query-time retrieval follows the official cookbook pattern: send the question plus the PageIndex tree to the LLM and ask for relevant `node_id` values. Returned spans are still mapped back to original LegalBench character offsets.
+
+## RLM RAG
+
+The RLM implementation is `RLMRAG` in `src/rag_eval/rlm_rag.py`.
+
+It uses the official `alexzhang13/rlm` package rather than vendoring RLM code. Install that package from the official repo before selecting `rlm`:
+
+```bash
+uv sync --dev --extra rlm
+# or:
+uv pip install 'rlms @ git+https://github.com/alexzhang13/rlm.git'
+```
+
+At build time, RLM stores only the loaded `Document` objects and a compact document catalog. There is no persistent embedding or tree index.
+
+At query time, the adapter creates an official `RLM` with an `RLMLogger` and custom REPL tools:
+
+- `list_documents(limit, offset)`: inspect ids, lengths, and short previews
+- `search_documents(query, limit, per_document_limit, window_chars)`: keyword-search full documents and return candidate windows with exact offsets
+- `read_document_span(document_id, start_char, end_char)`: read exact source text for a proposed span
+- `get_document_length(document_id)`: inspect document length before expanding or clipping spans
+
+The RLM now follows the same access pattern as `rlm-eval`: it receives
+`context["query"]` plus the full `context["corpus"] = {document_id: text}`
+mapping in the REPL, along with helper tools for browsing/searching windows.
+It also receives `make_span(document_id, snippet)`, which computes exact
+character offsets from an exact snippet match.
+
+The root prompt instructs it to return JSON:
+
+```json
+{
+  "spans": [
+    {
+      "document_id": "...",
+      "start_char": 123,
+      "end_char": 456,
+      "snippet": "exact substring from the source document"
+    }
+  ]
+}
+```
+
+The adapter accepts clean JSON, JSON embedded in surrounding prose, and
+Python-literal dict output. When a span includes `snippet`, the adapter will
+repair bad offsets from that snippet when possible. It still validates
+document ids, clamps offsets to the source document, caps spans with
+`rlm.max_retrieved_chars_per_span`, and returns normal `RetrievedSpan`
+objects. If the RLM returns document-level selections instead of spans, the
+adapter maps each selected document to the first configured span-length
+window so the evaluator still has a character range.
+
+When `rlm.record_reasoning_trajectory` is true, each result stores a normalized `reasoning_trajectory` with:
+
+- `turn_count`: number of official RLM iterations
+- `llm_call_count`: total model calls reported by the official usage summary
+- `final_response`: the final JSON or text response from RLM
+- `iterations`: each turn's LLM output plus REPL code/stdout/stderr/final value
+- `retrieved_spans`: final normalized spans returned to the evaluator
+
+The dashboard renders this as a collapsed "RLM reasoning trajectory" block under each RLM method panel.
 
 ## Scoring and Output
 

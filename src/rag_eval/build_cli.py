@@ -28,7 +28,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--methods",
-        help="Comma-separated methods to build: vector,pageindex,pageindex_official.",
+        help="Comma-separated methods to build: vector,pageindex,pageindex_official,rlm.",
     )
     parser.add_argument("--n", type=int, help="Number of sampled examples for sampled scope.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
@@ -56,6 +56,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     cfg.setdefault("vector_rag", {}).setdefault("reranker", {})
     cfg.setdefault("pageindex", {})
     cfg.setdefault("pageindex_official", {})
+    cfg.setdefault("rlm", {})
 
     if args.data_dir:
         cfg["data"]["data_dir"] = args.data_dir
@@ -148,10 +149,15 @@ def build_indexes(cfg: dict[str, Any]) -> None:
             f"(setup cost ${official_pageindex.setup_usage.estimated_cost_usd:.4f})"
         )
 
+    if "rlm" in methods:
+        print("RLM has no build-time index to warm; it searches documents at query time.")
+
 
 def _resolve_methods(cfg: dict[str, Any]) -> list[str]:
     methods = [name.lower() for name in cfg.get("run", {}).get("methods", ["pageindex"])]
-    unknown_methods = sorted(set(methods) - {"vector", "pageindex", "pageindex_official"})
+    unknown_methods = sorted(
+        set(methods) - {"vector", "pageindex", "pageindex_official", "rlm"}
+    )
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
     if not methods:
