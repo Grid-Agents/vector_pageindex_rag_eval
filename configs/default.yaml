@@ -26,7 +26,7 @@ vector_rag:
   # Choose which named model_profiles to run. Use [voyage] for Voyage-only runs.
   selected_model_profiles: [voyage]
   # chunk_strategies: [hierarchical, recursive, fixed, semantic]
-  chunk_strategies: [hierarchical, semantic]
+  chunk_strategies: [semantic]
   # search_strategies: [vector, hybrid]
   search_strategies: [hybrid]
   chunk_size: 1200
