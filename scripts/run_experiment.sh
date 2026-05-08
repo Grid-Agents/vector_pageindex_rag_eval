@@ -4,7 +4,7 @@ set -euo pipefail
 CONFIG="configs/default.yaml"
 BENCHMARKS="cuad"
 N="20"
-METHODS="vector,pageindex_official,rlm"
+METHODS="vector,pageindex_official,rlm,rlm_recall_plus"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
 SEARCH_STRATEGY=""
@@ -38,7 +38,7 @@ Options:
   --benchmark NAME          Benchmark to run. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Number of examples. Default: 10.
-  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official,rlm. Default: vector.
+  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official,rlm,rlm_recall_plus. Default: vector,pageindex_official,rlm,rlm_recall_plus.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, fixed, or semantic.
   --search-strategy NAME    vector or hybrid.
@@ -202,7 +202,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ",$METHODS," == *",rlm,"* ]]; then
+if [[ ",$METHODS," == *",rlm,"* ]] || [[ ",$METHODS," == *",rlm_recall_plus,"* ]]; then
   python_version="$(uv run python --version 2>&1 || true)"
   if [[ "$python_version" =~ Python\ 3\.10\. ]] || [[ "$python_version" =~ Python\ 3\.9\. ]] || [[ "$python_version" =~ Python\ 3\.[0-9]\. ]]; then
     cat <<EOF 1>&2

@@ -22,6 +22,21 @@ from .visualization import generate_dashboard
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+KNOWN_METHODS = {"vector", "pageindex", "pageindex_official", "rlm", "rlm_recall_plus"}
+
+
+def resolve_methods(methods: list[str] | tuple[str, ...] | str | None) -> list[str]:
+    if methods is None:
+        selected = ["vector", "pageindex"]
+    elif isinstance(methods, str):
+        selected = [part.strip() for part in methods.split(",") if part.strip()]
+    else:
+        selected = methods
+    normalized = [str(name).lower() for name in selected]
+    unknown_methods = sorted(set(normalized) - KNOWN_METHODS)
+    if unknown_methods:
+        raise ValueError(f"Unknown method(s): {unknown_methods}")
+    return normalized
 
 
 def run_experiment(cfg: dict[str, Any]) -> Path:
@@ -53,12 +68,7 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         corpus_scope=data_cfg.get("corpus_scope", "sampled"),
     )
 
-    methods = [name.lower() for name in run_cfg.get("methods", ["vector", "pageindex"])]
-    unknown_methods = sorted(
-        set(methods) - {"vector", "pageindex", "pageindex_official", "rlm"}
-    )
-    if unknown_methods:
-        raise ValueError(f"Unknown method(s): {unknown_methods}")
+    methods = resolve_methods(run_cfg.get("methods"))
     llm = None
     if answer_with_llm or "pageindex" in methods or "pageindex_official" in methods:
         llm = AnthropicLLM(cfg.get("llm", {}))
@@ -109,13 +119,25 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         official_pageindex.build(documents)
         systems["pageindex_official"] = official_pageindex
         setup_usage_by_method["pageindex_official"] = official_pageindex.setup_usage
-    if "rlm" in methods:
-        rlm_cfg = cfg.get("rlm", {})
-        rlm = RLMRAG(rlm_cfg, llm_cfg=cfg.get("llm", {}))
-        print(f"Preparing RLM retriever for {len(documents)} documents...")
+    for method_name, rlm_cfg, vector_tool_cfg in rlm_variant_configs(cfg):
+        if method_name not in methods:
+            continue
+        vector_tool_cache_dir = None
+        if vector_tool_cfg is not None:
+            vector_tool_cache_dir = resolve_path(
+                PROJECT_ROOT, vector_tool_cfg.get("cache_dir", ".cache/vector")
+            )
+        rlm = RLMRAG(
+            rlm_cfg,
+            llm_cfg=cfg.get("llm", {}),
+            method_name=method_name,
+            vector_tool_cfg=vector_tool_cfg,
+            vector_tool_cache_dir=vector_tool_cache_dir,
+        )
+        print(f"Preparing {method_name} retriever for {len(documents)} documents...")
         rlm.build(documents)
-        systems["rlm"] = rlm
-        setup_usage_by_method["rlm"] = Usage()
+        systems[method_name] = rlm
+        setup_usage_by_method[method_name] = Usage()
 
     run_examples = []
     rows = []
@@ -569,6 +591,74 @@ def vector_variant_configs(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any
                     (_unique_method_name(method_name, variants), variant_cfg)
                 )
     return variants
+
+
+def rlm_variant_configs(
+    cfg: dict[str, Any],
+) -> list[tuple[str, dict[str, Any], dict[str, Any] | None]]:
+    methods = set(resolve_methods(cfg.get("run", {}).get("methods", [])))
+    variants: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
+    base_cfg = deepcopy(cfg.get("rlm", {}))
+    if "rlm" in methods:
+        variants.append(("rlm", base_cfg, None))
+
+    if "rlm_recall_plus" in methods:
+        recall_plus_cfg = deep_update(base_cfg, cfg.get("rlm_recall_plus", {}))
+        variants.append(
+            (
+                "rlm_recall_plus",
+                recall_plus_cfg,
+                resolve_rlm_vector_tool_config(cfg, recall_plus_cfg),
+            )
+        )
+    return variants
+
+
+def resolve_rlm_vector_tool_config(
+    cfg: dict[str, Any], rlm_cfg: dict[str, Any]
+) -> dict[str, Any] | None:
+    tool_cfg = rlm_cfg.get("vector_tool") or {}
+    if not bool(tool_cfg.get("enabled", False)):
+        return None
+
+    vector_cfg = cfg.get("vector_rag", {})
+    base_cfg = _vector_base_config(vector_cfg)
+    selected_profiles = [
+        str(tool_cfg.get("model_profile", "voyage")),
+    ]
+    model_profiles = _filter_model_profiles(
+        vector_cfg.get("model_profiles") or [],
+        selected_profiles,
+    )
+    profile_cfg = {key: value for key, value in model_profiles[0].items() if key != "name"}
+    helper_cfg = deep_update(base_cfg, profile_cfg)
+    helper_cfg["chunk_strategy"] = str(tool_cfg.get("chunk_strategy", "semantic"))
+    helper_cfg["search_strategy"] = str(tool_cfg.get("search_strategy", "hybrid"))
+    helper_cfg["cache_dir"] = str(
+        tool_cfg.get("cache_dir", helper_cfg.get("cache_dir", ".cache/vector"))
+    )
+
+    max_results = max(1, int(tool_cfg.get("max_results", 8)))
+    requested_top_k = max(1, int(tool_cfg.get("top_k", max_results)))
+    helper_cfg["top_k"] = max(
+        int(helper_cfg.get("top_k", max_results)),
+        max_results,
+        requested_top_k,
+    )
+    reranker_cfg = deepcopy(helper_cfg.get("reranker") or {})
+    if reranker_cfg.get("enabled", True):
+        reranker_cfg["top_k"] = max(
+            int(reranker_cfg.get("top_k", max_results)),
+            max_results,
+            requested_top_k,
+        )
+        helper_cfg["reranker"] = reranker_cfg
+
+    if "force_reindex" in vector_cfg:
+        helper_cfg["force_reindex"] = bool(vector_cfg.get("force_reindex", False))
+    if "force_reindex" in tool_cfg:
+        helper_cfg["force_reindex"] = bool(tool_cfg.get("force_reindex", False))
+    return helper_cfg
 
 
 def _vector_base_config(vector_cfg: dict[str, Any]) -> dict[str, Any]:

@@ -3,7 +3,7 @@ import sys
 from types import SimpleNamespace
 
 from rag_eval.rlm_rag import RLMRAG
-from rag_eval.types import Document
+from rag_eval.types import Document, RetrievedSpan, RetrievalOutput
 from rag_eval.visualization import _public_result
 
 
@@ -105,6 +105,7 @@ def test_rlm_rag_parses_spans_and_turn_trajectory(monkeypatch):
     assert FakeRLM.last_kwargs["backend"] == "openai"
     assert "make_span" in FakeRLM.last_kwargs["custom_tools"]
     assert "search_documents" in FakeRLM.last_kwargs["custom_tools"]
+    assert "vector_search" not in FakeRLM.last_kwargs["custom_tools"]
     assert FakeRLM.last_prompt["query"] == "Where is the target clause?"
     assert FakeRLM.last_prompt["corpus"]["doc.txt"] == "alpha target clause text beta"
     assert "make_span" in FakeRLM.last_root_prompt
@@ -119,6 +120,57 @@ def test_rlm_rag_parses_spans_and_turn_trajectory(monkeypatch):
     assert trajectory["turn_count"] == 1
     assert trajectory["llm_call_count"] == 2
     assert trajectory["iterations"][0]["llm_output"] == "I will search the documents."
+
+
+def test_rlm_recall_plus_registers_vector_search_and_recall_prompt(monkeypatch):
+    class FakeVectorTool:
+        def query(self, query):
+            return RetrievalOutput(
+                spans=[
+                    RetrievedSpan(
+                        "doc.txt",
+                        6,
+                        24,
+                        "target clause text",
+                        score=0.9,
+                        metadata={
+                            "chunk_title": "semantic chunk 0",
+                            "chunk_level": 1,
+                            "search_strategy": "hybrid",
+                            "vector_score": 0.8,
+                            "hybrid_score": 0.9,
+                        },
+                    )
+                ]
+            )
+
+    install_fake_rlm(monkeypatch)
+    monkeypatch.setattr(RLMRAG, "_build_vector_tool", lambda self, documents: FakeVectorTool())
+    rag = RLMRAG(
+        {
+            "backend": "openai",
+            "backend_kwargs": {"api_key": "fake-key", "model_name": "fake-model"},
+            "prompt_style": "recall_plus",
+            "min_candidate_regions_before_finalize": 3,
+            "vector_tool": {"enabled": True, "max_results": 4},
+        },
+        method_name="rlm_recall_plus",
+        vector_tool_cfg={"embedding_provider": "voyage"},
+    )
+    rag.build([Document("doc.txt", "alpha target clause text beta")])
+
+    result = rag.query("Where is the target clause?")
+    vector_hits = rag._tool_vector_search("target clause", top_k=1)
+
+    assert "vector_search" in FakeRLM.last_kwargs["custom_tools"]
+    assert "Inspect at least 3 candidate regions" in FakeRLM.last_root_prompt
+    assert "Use `vector_search` early" in FakeRLM.last_root_prompt
+    assert result.metadata["retriever"] == "rlm_recall_plus"
+    assert result.metadata["rlm_variant"] == "rlm_recall_plus"
+    assert result.metadata["reasoning_trajectory"]["type"] == "rlm_recall_plus"
+    assert vector_hits[0]["document_id"] == "doc.txt"
+    assert vector_hits[0]["metadata"]["search_strategy"] == "hybrid"
+    assert vector_hits[0]["text"] == "target clause text"
 
 
 def test_rlm_rag_repairs_offsets_from_snippet_and_python_literal(monkeypatch):

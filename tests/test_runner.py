@@ -1,6 +1,11 @@
 import argparse
 
-from rag_eval.runner import _run_method, vector_variant_configs
+from rag_eval.runner import (
+    _run_method,
+    resolve_rlm_vector_tool_config,
+    rlm_variant_configs,
+    vector_variant_configs,
+)
 from rag_eval.vector_config import apply_vector_cli_overrides
 from rag_eval.types import (
     Example,
@@ -155,3 +160,89 @@ def test_include_voyage_adds_matching_model_profile():
     assert voyage_cfg["embedding_provider"] == "voyage"
     assert voyage_cfg["query_instruction"] == ""
     assert voyage_cfg["reranker"]["provider"] == "voyage"
+
+
+def test_rlm_variant_configs_builds_recall_plus_from_baseline():
+    cfg = {
+        "run": {"methods": ["rlm", "rlm_recall_plus"]},
+        "rlm": {
+            "backend": "openai",
+            "selected_spans": 5,
+        },
+        "rlm_recall_plus": {
+            "selected_spans": 8,
+            "prompt_style": "recall_plus",
+            "vector_tool": {"enabled": True},
+        },
+        "vector_rag": {
+            "cache_dir": ".cache/vector",
+            "chunk_size": 1200,
+            "chunk_overlap": 120,
+            "semantic_chunking": {"break_percentile": 82, "window_size": 3},
+            "hybrid": {"vector_weight": 0.65, "bm25_weight": 0.35},
+            "model_profiles": [
+                {
+                    "name": "voyage",
+                    "embedding_provider": "voyage",
+                    "embedding_model": "voyage-law-2",
+                    "reranker": {"enabled": True, "provider": "voyage", "model": "rerank-2", "top_k": 5},
+                }
+            ],
+        },
+    }
+
+    variants = rlm_variant_configs(cfg)
+
+    assert [name for name, _, _ in variants] == ["rlm", "rlm_recall_plus"]
+    recall_plus_cfg = variants[1][1]
+    assert recall_plus_cfg["backend"] == "openai"
+    assert recall_plus_cfg["selected_spans"] == 8
+    assert recall_plus_cfg["prompt_style"] == "recall_plus"
+    assert variants[1][2] is not None
+
+
+def test_resolve_rlm_vector_tool_config_pins_semantic_hybrid_voyage():
+    cfg = {
+        "vector_rag": {
+            "cache_dir": ".cache/vector",
+            "chunk_strategy": "hierarchical",
+            "search_strategy": "vector",
+            "chunk_size": 1200,
+            "chunk_overlap": 120,
+            "semantic_chunking": {"break_percentile": 82, "window_size": 3},
+            "hybrid": {"vector_weight": 0.65, "bm25_weight": 0.35},
+            "model_profiles": [
+                {
+                    "name": "bge",
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "fake-bge",
+                    "reranker": {"enabled": False},
+                },
+                {
+                    "name": "voyage",
+                    "embedding_provider": "voyage",
+                    "embedding_model": "voyage-law-2",
+                    "reranker": {"enabled": True, "provider": "voyage", "model": "rerank-2", "top_k": 5},
+                },
+            ],
+        }
+    }
+    rlm_cfg = {
+        "vector_tool": {
+            "enabled": True,
+            "model_profile": "voyage",
+            "chunk_strategy": "semantic",
+            "search_strategy": "hybrid",
+            "max_results": 8,
+        }
+    }
+
+    vector_tool_cfg = resolve_rlm_vector_tool_config(cfg, rlm_cfg)
+
+    assert vector_tool_cfg is not None
+    assert vector_tool_cfg["embedding_provider"] == "voyage"
+    assert vector_tool_cfg["embedding_model"] == "voyage-law-2"
+    assert vector_tool_cfg["chunk_strategy"] == "semantic"
+    assert vector_tool_cfg["search_strategy"] == "hybrid"
+    assert vector_tool_cfg["reranker"]["provider"] == "voyage"
+    assert vector_tool_cfg["reranker"]["top_k"] >= 8
