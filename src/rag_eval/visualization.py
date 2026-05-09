@@ -167,7 +167,7 @@ def _public_retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
-    if trajectory.get("type") == "rlm":
+    if _is_rlm_reasoning_trajectory(trajectory):
         return _public_rlm_reasoning_trajectory(trajectory)
     public = {
         "query": trajectory.get("query"),
@@ -186,7 +186,8 @@ def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 def _public_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
     return {
-        "type": "rlm",
+        "type": trajectory.get("type") or "rlm",
+        "method_name": trajectory.get("method_name"),
         "query": trajectory.get("query"),
         "turn_count": trajectory.get("turn_count"),
         "llm_call_count": trajectory.get("llm_call_count"),
@@ -205,6 +206,18 @@ def _public_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, An
         ],
         "errors": trajectory.get("errors") or [],
     }
+
+
+def _is_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> bool:
+    trajectory_type = str(trajectory.get("type") or "")
+    method_name = str(trajectory.get("method_name") or "")
+    return (
+        trajectory_type == "rlm"
+        or trajectory_type.startswith("rlm_")
+        or method_name == "rlm"
+        or method_name.startswith("rlm_")
+        or isinstance(trajectory.get("iterations"), list)
+    )
 
 
 def _public_rlm_iteration(item: dict[str, Any]) -> dict[str, Any]:
@@ -355,6 +368,7 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .method.pageindex { border-left-color: #8a5cf6; }
 .method.pageindex_official { border-left-color: #00a884; }
 .method.rlm { border-left-color: #d66f00; }
+.method.rlm_recall_plus { border-left-color: #b44100; }
 .query { padding: 10px; background: #fafafa; border: 1px solid #eee; border-radius: 6px; white-space: pre-wrap; }
 .answer { margin: 8px 0; padding: 9px; background: #fafafa; border-left: 3px solid #c7c7c0; white-space: pre-wrap; }
 .span { margin-top: 8px; border: 1px solid #deded8; border-radius: 6px; overflow: hidden; }

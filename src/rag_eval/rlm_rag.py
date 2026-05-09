@@ -3,12 +3,14 @@ from __future__ import annotations
 import ast
 import json
 import os
+from pathlib import Path
 import re
 import sys
 from typing import Any
 
 from .json_utils import extract_json_object
 from .types import Document, RetrievedSpan, RetrievalOutput, Usage
+from .vector_rag import VectorRAG
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_'-]*")
@@ -77,7 +79,7 @@ don't match the text will be corrected from `snippet` when possible and
 discarded otherwise.
 """.strip()
 
-_ROOT_PROMPT = f"""\
+_BASE_ROOT_PROMPT = f"""\
 You are answering a legal-document retrieval query.
 
 The variable `context` in your Python REPL holds:
@@ -124,11 +126,23 @@ class RLMRAG:
 
     name = "rlm"
 
-    def __init__(self, cfg: dict[str, Any], *, llm_cfg: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        cfg: dict[str, Any],
+        *,
+        llm_cfg: dict[str, Any] | None = None,
+        method_name: str | None = None,
+        vector_tool_cfg: dict[str, Any] | None = None,
+        vector_tool_cache_dir: Path | None = None,
+    ):
         self.cfg = cfg
         self.llm_cfg = llm_cfg or {}
+        self.method_name = str(method_name or cfg.get("method_name") or self.name)
         self.documents: dict[str, Document] = {}
         self.document_catalog: list[dict[str, Any]] = []
+        self.vector_tool_cfg = dict(vector_tool_cfg or {})
+        self.vector_tool_cache_dir = vector_tool_cache_dir
+        self.vector_tool: VectorRAG | None = None
 
     def build(self, documents: list[Document]) -> None:
         self.documents = {doc.document_id: doc for doc in documents}
@@ -141,6 +155,9 @@ class RLMRAG:
             }
             for doc in documents
         ]
+        self.vector_tool = None
+        if self._vector_tool_enabled():
+            self.vector_tool = self._build_vector_tool(documents)
 
     def query(self, query: str) -> RetrievalOutput:
         if not self.documents:
@@ -169,7 +186,8 @@ class RLMRAG:
         )
 
         metadata = {
-            "retriever": "rlm",
+            "retriever": self.method_name,
+            "rlm_variant": self.method_name,
             "rlm_backend": self._backend(),
             "rlm_model": self._model_name(),
             "rlm_turn_count": trajectory["turn_count"],
@@ -177,6 +195,7 @@ class RLMRAG:
             "rlm_final_response": response,
             "rlm_usage_summary": trajectory["usage_summary"],
             "rlm_parse_source": parse_source,
+            "rlm_vector_tool_enabled": self.vector_tool is not None,
         }
         if record_reasoning:
             metadata["reasoning_trajectory"] = trajectory
@@ -270,10 +289,31 @@ class RLMRAG:
         }
 
     def _root_prompt(self) -> str:
-        return _ROOT_PROMPT
+        prompt_style = str(self.cfg.get("prompt_style", "baseline")).lower()
+        if prompt_style != "recall_plus":
+            return _BASE_ROOT_PROMPT
+
+        min_candidates = max(1, int(self.cfg.get("min_candidate_regions_before_finalize", 3)))
+        sections = [_BASE_ROOT_PROMPT.rstrip(), "", "Search policy:"]
+        if self._vector_tool_enabled():
+            sections.extend(
+                [
+                    "- Use `vector_search` early to surface semantic candidate regions before broad manual searching.",
+                    "- You still have full direct corpus access in Python if you need to verify or expand beyond the retrieved regions.",
+                ]
+            )
+        sections.extend(
+            [
+                "- During search, optimize for recall first and precision second.",
+                f"- Do not finalize after the first plausible hit. Inspect at least {min_candidates} candidate regions unless the document is clearly exhausted.",
+                "- When you find a likely clause, keep searching for exceptions, carve-outs, follow-on provisions, and related clauses elsewhere in the document.",
+                "- Return multiple spans when the answer is distributed across multiple clauses or when one clause is modified by another clause.",
+            ]
+        )
+        return "\n".join(sections)
 
     def _custom_tools(self) -> dict[str, Any]:
-        return {
+        tools = {
             "make_span": {
                 "tool": self._tool_make_span,
                 "description": (
@@ -310,6 +350,16 @@ class RLMRAG:
                 "description": "Return the character length for a document_id.",
             },
         }
+        if self.vector_tool is not None:
+            tools["vector_search"] = {
+                "tool": self._tool_vector_search,
+                "description": (
+                    "Semantic-hybrid vector retrieval over the corpus. Arguments: "
+                    "query, top_k=8, include_text=true. Returns candidate spans with "
+                    "document_id/start_char/end_char/text/score/metadata."
+                ),
+            }
+        return tools
 
     def _tool_list_documents(self, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 200))
@@ -421,6 +471,44 @@ class RLMRAG:
                 )
         results.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
         return results[:limit]
+
+    def _tool_vector_search(
+        self,
+        query: str,
+        top_k: int = 8,
+        include_text: bool = True,
+    ) -> list[dict[str, Any]]:
+        if self.vector_tool is None:
+            return []
+        tool_cfg = self.cfg.get("vector_tool") or {}
+        limit = max(1, min(int(top_k), int(tool_cfg.get("max_results", 8))))
+        include_text = bool(include_text if include_text is not None else tool_cfg.get("include_text", True))
+        retrieval = self.vector_tool.query(str(query))
+        items: list[dict[str, Any]] = []
+        for span in retrieval.spans[:limit]:
+            metadata = span.metadata or {}
+            item = {
+                "document_id": span.document_id,
+                "start_char": span.start_char,
+                "end_char": span.end_char,
+                "score": span.score,
+                "metadata": {
+                    key: metadata.get(key)
+                    for key in (
+                        "chunk_title",
+                        "chunk_level",
+                        "search_strategy",
+                        "vector_score",
+                        "bm25_score",
+                        "hybrid_score",
+                    )
+                    if key in metadata
+                },
+            }
+            if include_text:
+                item["text"] = span.text
+            items.append(item)
+        return items
 
     def _spans_from_completion(
         self,
@@ -564,7 +652,8 @@ class RLMRAG:
             text=doc.text[start:end],
             score=score,
             metadata={
-                "retriever": "rlm",
+                "retriever": self.method_name,
+                "rlm_variant": self.method_name,
                 "rank": rank,
                 "reason": reason,
                 "rlm_reason": reason,
@@ -591,7 +680,8 @@ class RLMRAG:
         normalized_turns = [_normalize_iteration(item, idx) for idx, item in enumerate(iterations or [], start=1)]
         usage_summary = _usage_summary_dict(getattr(completion, "usage_summary", None))
         return {
-            "type": "rlm",
+            "type": self.method_name,
+            "method_name": self.method_name,
             "query": query,
             "turn_count": len(normalized_turns),
             "llm_call_count": _usage_call_count(usage_summary),
@@ -610,6 +700,21 @@ class RLMRAG:
                 for span in spans
             ],
         }
+
+    def _vector_tool_enabled(self) -> bool:
+        return bool((self.cfg.get("vector_tool") or {}).get("enabled", False))
+
+    def _build_vector_tool(self, documents: list[Document]) -> VectorRAG:
+        if not self.vector_tool_cfg:
+            raise RuntimeError(
+                f"{self.method_name} enables vector_tool but no vector helper config was provided."
+            )
+        cache_dir = self.vector_tool_cache_dir or Path(
+            self.vector_tool_cfg.get("cache_dir", ".cache/vector")
+        )
+        vector_tool = VectorRAG(self.vector_tool_cfg, cache_dir=cache_dir)
+        vector_tool.build(documents)
+        return vector_tool
 
 
 def _import_official_rlm() -> tuple[Any, Any]:

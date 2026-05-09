@@ -124,7 +124,7 @@ rlm:
   environment: local
   max_depth: 1
   max_iterations: 20
-  max_timeout: 180
+  max_timeout: 600
   backend_max_tokens: 2048
   selected_spans: 5
   max_retrieved_chars_per_span: 5000
@@ -135,13 +135,29 @@ rlm:
   max_hits_per_term_per_document: 30
   record_reasoning_trajectory: true
 
+rlm_recall_plus:
+  prompt_style: recall_plus
+  selected_spans: 8
+  max_tool_results: 80
+  max_tool_window_chars: 4000
+  min_candidate_regions_before_finalize: 3
+  vector_tool:
+    enabled: true
+    model_profile: voyage
+    chunk_strategy: semantic
+    search_strategy: hybrid
+    top_k: 8
+    max_results: 8
+    include_text: true
+    cache_dir: .cache/vector
+
 run:
   results_dir: results
   # Set run_id plus merge_results: true to append/replace methods in an existing run folder.
   # run_id: 20260505T172718Z
   merge_results: false
   # Add "rlm" to compare against the official Recursive Language Model retriever.
-  methods: ["vector", "pageindex", "pageindex_official", "rlm"]
+  methods: ["vector", "pageindex", "pageindex_official", "rlm", "rlm_recall_plus"]
   n: 10
   seed: 42
   # Retrieval metrics are scored against benchmark snippets, not generated answers.
