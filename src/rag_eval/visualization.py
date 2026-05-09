@@ -167,7 +167,7 @@ def _public_retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
-    if trajectory.get("type") == "rlm":
+    if _is_rlm_reasoning_trajectory(trajectory):
         return _public_rlm_reasoning_trajectory(trajectory)
     public = {
         "query": trajectory.get("query"),
@@ -186,7 +186,8 @@ def _public_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 def _public_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
     return {
-        "type": "rlm",
+        "type": trajectory.get("type") or "rlm",
+        "method_name": trajectory.get("method_name"),
         "query": trajectory.get("query"),
         "turn_count": trajectory.get("turn_count"),
         "llm_call_count": trajectory.get("llm_call_count"),
@@ -205,6 +206,18 @@ def _public_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> dict[str, An
         ],
         "errors": trajectory.get("errors") or [],
     }
+
+
+def _is_rlm_reasoning_trajectory(trajectory: dict[str, Any]) -> bool:
+    trajectory_type = str(trajectory.get("type") or "")
+    method_name = str(trajectory.get("method_name") or "")
+    return (
+        trajectory_type == "rlm"
+        or trajectory_type.startswith("rlm_")
+        or method_name == "rlm"
+        or method_name.startswith("rlm_")
+        or isinstance(trajectory.get("iterations"), list)
+    )
 
 
 def _public_rlm_iteration(item: dict[str, Any]) -> dict[str, Any]:

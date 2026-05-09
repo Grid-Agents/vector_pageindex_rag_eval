@@ -124,7 +124,7 @@ rlm:
   environment: local
   max_depth: 1
   max_iterations: 20
-  max_timeout: 180
+  max_timeout: 600
   backend_max_tokens: 2048
   selected_spans: 5
   max_retrieved_chars_per_span: 5000

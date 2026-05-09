@@ -261,3 +261,39 @@ def test_public_result_preserves_rlm_turn_outputs():
     assert public["reasoning_trajectory"]["type"] == "rlm"
     assert public["reasoning_trajectory"]["iterations"][0]["llm_output"] == "searching"
     assert public["reasoning_trajectory"]["iterations"][0]["code_blocks"][0]["code"] == "x = 1"
+
+
+def test_public_result_preserves_rlm_recall_plus_turn_outputs():
+    result = {
+        "method": "rlm_recall_plus",
+        "retrieved_spans": [],
+        "retrieval_metadata": {},
+        "reasoning_trajectory": {
+            "type": "rlm_recall_plus",
+            "method_name": "rlm_recall_plus",
+            "query": "q",
+            "turn_count": 1,
+            "llm_call_count": 1,
+            "final_response": '{"spans":[]}',
+            "iterations": [
+                {
+                    "turn": 1,
+                    "llm_output": "searching with vector tool",
+                    "code_blocks": [{"block": 1, "code": "hits = vector_search(...)", "stdout": "ok"}],
+                }
+            ],
+        },
+    }
+
+    public = _public_result(result)
+
+    assert public["reasoning_trajectory"]["type"] == "rlm_recall_plus"
+    assert public["reasoning_trajectory"]["method_name"] == "rlm_recall_plus"
+    assert (
+        public["reasoning_trajectory"]["iterations"][0]["llm_output"]
+        == "searching with vector tool"
+    )
+    assert (
+        public["reasoning_trajectory"]["iterations"][0]["code_blocks"][0]["code"]
+        == "hits = vector_search(...)"
+    )
