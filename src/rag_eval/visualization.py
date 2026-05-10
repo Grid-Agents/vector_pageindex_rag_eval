@@ -368,7 +368,7 @@ th { color: #555; font-weight: 600; background: #fafafa; }
 .method.pageindex { border-left-color: #8a5cf6; }
 .method.pageindex_official { border-left-color: #00a884; }
 .method.rlm { border-left-color: #d66f00; }
-.method.rlm_recall_plus { border-left-color: #b44100; }
+.method.rlm_pageindex { border-left-color: #b44100; }
 .query { padding: 10px; background: #fafafa; border: 1px solid #eee; border-radius: 6px; white-space: pre-wrap; }
 .answer { margin: 8px 0; padding: 9px; background: #fafafa; border-left: 3px solid #c7c7c0; white-space: pre-wrap; }
 .span { margin-top: 8px; border: 1px solid #deded8; border-radius: 6px; overflow: hidden; }

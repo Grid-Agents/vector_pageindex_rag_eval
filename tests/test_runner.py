@@ -162,17 +162,17 @@ def test_include_voyage_adds_matching_model_profile():
     assert voyage_cfg["reranker"]["provider"] == "voyage"
 
 
-def test_rlm_variant_configs_builds_recall_plus_from_baseline():
+def test_rlm_variant_configs_builds_pageindex_from_baseline():
     cfg = {
-        "run": {"methods": ["rlm", "rlm_recall_plus"]},
+        "run": {"methods": ["rlm", "rlm_pageindex"]},
         "rlm": {
             "backend": "openai",
             "selected_spans": 5,
         },
-        "rlm_recall_plus": {
+        "rlm_pageindex": {
             "selected_spans": 8,
-            "prompt_style": "recall_plus",
-            "vector_tool": {"enabled": True},
+            "prompt_style": "pageindex",
+            "pageindex_tool": {"enabled": True},
         },
         "vector_rag": {
             "cache_dir": ".cache/vector",
@@ -189,16 +189,18 @@ def test_rlm_variant_configs_builds_recall_plus_from_baseline():
                 }
             ],
         },
+        "pageindex": {"cache_dir": ".cache/pageindex"},
     }
 
     variants = rlm_variant_configs(cfg)
 
-    assert [name for name, _, _ in variants] == ["rlm", "rlm_recall_plus"]
-    recall_plus_cfg = variants[1][1]
-    assert recall_plus_cfg["backend"] == "openai"
-    assert recall_plus_cfg["selected_spans"] == 8
-    assert recall_plus_cfg["prompt_style"] == "recall_plus"
-    assert variants[1][2] is not None
+    assert [name for name, _, _, _ in variants] == ["rlm", "rlm_pageindex"]
+    pageindex_cfg = variants[1][1]
+    assert pageindex_cfg["backend"] == "openai"
+    assert pageindex_cfg["selected_spans"] == 8
+    assert pageindex_cfg["prompt_style"] == "pageindex"
+    assert variants[1][2] is None
+    assert variants[1][3] is not None
 
 
 def test_resolve_rlm_vector_tool_config_pins_semantic_hybrid_voyage():

@@ -54,26 +54,32 @@ def test_build_cli_resolve_methods_accepts_rlm():
     assert _resolve_methods(cfg) == ["rlm"]
 
 
-def test_build_cli_resolve_methods_accepts_rlm_recall_plus():
-    cfg = {"run": {"methods": ["rlm_recall_plus"]}}
+def test_build_cli_resolve_methods_accepts_rlm_pageindex():
+    cfg = {"run": {"methods": ["rlm_pageindex"]}}
 
-    assert _resolve_methods(cfg) == ["rlm_recall_plus"]
+    assert _resolve_methods(cfg) == ["rlm_pageindex"]
 
 
-def test_build_cli_force_reindex_for_rlm_recall_plus_enables_vector_cache():
+def test_build_cli_resolve_methods_accepts_hyphenated_rlm_pageindex():
+    cfg = {"run": {"methods": ["rlm-pageindex"]}}
+
+    assert _resolve_methods(cfg) == ["rlm_pageindex"]
+
+
+def test_build_cli_force_reindex_for_rlm_pageindex_enables_pageindex_cache():
     cfg = {
-        "run": {"methods": ["rlm_recall_plus"]},
+        "run": {"methods": ["rlm_pageindex"]},
         "vector_rag": {"force_reindex": False, "reranker": {}},
         "pageindex": {"force_reindex": False},
         "pageindex_official": {"force_reindex": False},
         "rlm": {},
-        "rlm_recall_plus": {},
+        "rlm_pageindex": {},
         "data": {},
     }
     args = argparse.Namespace(
         data_dir=None,
         benchmarks=None,
-        methods="rlm_recall_plus",
+        methods="rlm_pageindex",
         n=None,
         seed=None,
         corpus_scope=None,
@@ -85,4 +91,5 @@ def test_build_cli_force_reindex_for_rlm_recall_plus_enables_vector_cache():
 
     apply_overrides(cfg, args)
 
-    assert cfg["vector_rag"]["force_reindex"] is True
+    assert cfg["vector_rag"]["force_reindex"] is False
+    assert cfg["pageindex"]["force_reindex"] is True

@@ -4,8 +4,8 @@ set -euo pipefail
 CONFIG="configs/default.yaml"
 BENCHMARKS="cuad"
 N="20"
-METHODS="vector,pageindex_official,rlm,rlm_recall_plus"
-# METHODS="rlm_recall_plus"
+# METHODS="vector,pageindex_official,rlm,rlm_pageindex"
+METHODS="rlm_pageindex"
 CORPUS_SCOPE="all"
 CHUNK_STRATEGY=""
 SEARCH_STRATEGY=""
@@ -39,7 +39,7 @@ Options:
   --benchmark NAME          Benchmark to run. Default: cuad.
   --benchmarks LIST         Comma-separated benchmarks, or all.
   --n N                     Number of examples. Default: 10.
-  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official,rlm,rlm_recall_plus. Default: vector,pageindex_official,rlm,rlm_recall_plus.
+  --methods LIST            Comma-separated methods: vector,pageindex,pageindex_official,rlm,rlm_pageindex (alias: rlm-pageindex). Default: vector,pageindex_official,rlm,rlm_pageindex.
   --corpus-scope SCOPE      sampled or all. Default: all.
   --chunk-strategy NAME     hierarchical, recursive, fixed, or semantic.
   --search-strategy NAME    vector or hybrid.
@@ -203,7 +203,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ",$METHODS," == *",rlm,"* ]] || [[ ",$METHODS," == *",rlm_recall_plus,"* ]]; then
+if [[ ",$METHODS," == *",rlm,"* ]] || [[ ",$METHODS," == *",rlm_pageindex,"* ]]; then
   python_version="$(uv run python --version 2>&1 || true)"
   if [[ "$python_version" =~ Python\ 3\.10\. ]] || [[ "$python_version" =~ Python\ 3\.9\. ]] || [[ "$python_version" =~ Python\ 3\.[0-9]\. ]]; then
     cat <<EOF 1>&2

@@ -135,21 +135,14 @@ rlm:
   max_hits_per_term_per_document: 30
   record_reasoning_trajectory: true
 
-rlm_recall_plus:
-  prompt_style: recall_plus
+rlm_pageindex:
+  prompt_style: pageindex
   selected_spans: 8
   max_tool_results: 80
   max_tool_window_chars: 4000
-  min_candidate_regions_before_finalize: 3
-  vector_tool:
+  pageindex_tool:
     enabled: true
-    model_profile: voyage
-    chunk_strategy: semantic
-    search_strategy: hybrid
-    top_k: 8
-    max_results: 8
-    include_text: true
-    cache_dir: .cache/vector
+    cache_dir: .cache/pageindex
 
 run:
   results_dir: results
@@ -157,7 +150,7 @@ run:
   # run_id: 20260505T172718Z
   merge_results: false
   # Add "rlm" to compare against the official Recursive Language Model retriever.
-  methods: ["vector", "pageindex", "pageindex_official", "rlm", "rlm_recall_plus"]
+  methods: ["vector", "pageindex", "pageindex_official", "rlm", "rlm_pageindex"]
   n: 10
   seed: 42
   # Retrieval metrics are scored against benchmark snippets, not generated answers.

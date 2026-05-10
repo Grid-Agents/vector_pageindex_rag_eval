@@ -34,7 +34,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--methods",
-        help="Comma-separated methods to build: vector,pageindex,pageindex_official,rlm,rlm_recall_plus.",
+        help="Comma-separated methods to build: vector,pageindex,pageindex_official,rlm,rlm_pageindex (alias: rlm-pageindex).",
     )
     parser.add_argument("--n", type=int, help="Number of sampled examples for sampled scope.")
     parser.add_argument("--seed", type=int, help="Sample seed.")
@@ -63,7 +63,7 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     cfg.setdefault("pageindex", {})
     cfg.setdefault("pageindex_official", {})
     cfg.setdefault("rlm", {})
-    cfg.setdefault("rlm_recall_plus", {})
+    cfg.setdefault("rlm_pageindex", {})
 
     if args.data_dir:
         cfg["data"]["data_dir"] = args.data_dir
@@ -81,9 +81,11 @@ def apply_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> None:
     if args.force_reindex:
         methods = set(_resolve_methods(cfg))
         cfg["vector_rag"]["force_reindex"] = (
-            "vector" in methods or "rlm_recall_plus" in methods
+            "vector" in methods
         )
-        cfg["pageindex"]["force_reindex"] = "pageindex" in methods
+        cfg["pageindex"]["force_reindex"] = (
+            "pageindex" in methods or "rlm_pageindex" in methods
+        )
         cfg["pageindex_official"]["force_reindex"] = "pageindex_official" in methods
 
 
@@ -91,6 +93,7 @@ def build_indexes(cfg: dict[str, Any]) -> None:
     data_cfg = cfg.get("data", {})
     run_cfg = cfg.get("run", {})
     methods = _resolve_methods(cfg)
+    rlm_variants = rlm_variant_configs(cfg)
 
     loader = LegalBenchRAGLoader(
         resolve_path(PROJECT_ROOT, data_cfg.get("data_dir", "data"))
@@ -117,7 +120,11 @@ def build_indexes(cfg: dict[str, Any]) -> None:
             vector.build(documents)
             print(f"{method_name} index ready in {vector.cache_dir}")
 
-    if "pageindex" in methods:
+    pageindex_required = "pageindex" in methods or any(
+        pageindex_tool_cfg is not None
+        for _name, _cfg, _vector_tool_cfg, pageindex_tool_cfg in rlm_variants
+    )
+    if pageindex_required:
         pageindex_cfg = cfg.get("pageindex", {})
         llm = None
         if pageindex_cfg.get("build_with_llm", True):
@@ -158,12 +165,20 @@ def build_indexes(cfg: dict[str, Any]) -> None:
             f"(setup cost ${official_pageindex.setup_usage.estimated_cost_usd:.4f})"
         )
 
-    for method_name, rlm_cfg, vector_tool_cfg in rlm_variant_configs(cfg):
+    for method_name, rlm_cfg, vector_tool_cfg, pageindex_tool_cfg in rlm_variants:
         if method_name not in methods:
             continue
-        if vector_tool_cfg is None:
+        if vector_tool_cfg is None and pageindex_tool_cfg is None:
             print(
                 f"{method_name} has no build-time index to warm; it searches documents at query time."
+            )
+            continue
+        if pageindex_tool_cfg is not None and vector_tool_cfg is None:
+            pageindex_tool_cache_dir = resolve_path(
+                PROJECT_ROOT, pageindex_tool_cfg.get("cache_dir", ".cache/pageindex")
+            )
+            print(
+                f"{method_name} will use PageIndex cache from {pageindex_tool_cache_dir}."
             )
             continue
         vector_tool_cache_dir = resolve_path(
@@ -175,6 +190,13 @@ def build_indexes(cfg: dict[str, Any]) -> None:
             method_name=method_name,
             vector_tool_cfg=vector_tool_cfg,
             vector_tool_cache_dir=vector_tool_cache_dir,
+            pageindex_tool_cfg=pageindex_tool_cfg,
+            pageindex_tool_cache_dir=resolve_path(
+                PROJECT_ROOT,
+                pageindex_tool_cfg.get("cache_dir", ".cache/pageindex"),
+            )
+            if pageindex_tool_cfg is not None
+            else None,
         )
         print(f"Building {method_name} vector helper into {vector_tool_cache_dir}...")
         rlm.build(documents)

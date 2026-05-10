@@ -22,7 +22,7 @@ from .visualization import generate_dashboard
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-KNOWN_METHODS = {"vector", "pageindex", "pageindex_official", "rlm", "rlm_recall_plus"}
+KNOWN_METHODS = {"vector", "pageindex", "pageindex_official", "rlm", "rlm_pageindex"}
 
 
 def resolve_methods(methods: list[str] | tuple[str, ...] | str | None) -> list[str]:
@@ -32,7 +32,7 @@ def resolve_methods(methods: list[str] | tuple[str, ...] | str | None) -> list[s
         selected = [part.strip() for part in methods.split(",") if part.strip()]
     else:
         selected = methods
-    normalized = [str(name).lower() for name in selected]
+    normalized = [str(name).lower().replace("-", "_") for name in selected]
     unknown_methods = sorted(set(normalized) - KNOWN_METHODS)
     if unknown_methods:
         raise ValueError(f"Unknown method(s): {unknown_methods}")
@@ -69,8 +69,14 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
     )
 
     methods = resolve_methods(run_cfg.get("methods"))
+    rlm_variants = rlm_variant_configs(cfg)
     llm = None
-    if answer_with_llm or "pageindex" in methods or "pageindex_official" in methods:
+    if (
+        answer_with_llm
+        or "pageindex" in methods
+        or "pageindex_official" in methods
+        or any(pageindex_tool_cfg is not None for _name, _cfg, _vector_tool_cfg, pageindex_tool_cfg in rlm_variants)
+    ):
         llm = AnthropicLLM(cfg.get("llm", {}))
 
     systems = {}
@@ -89,7 +95,12 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
             vector.build(documents)
             systems[method_name] = vector
             setup_usage_by_method[method_name] = Usage()
-    if "pageindex" in methods:
+    pageindex_required = "pageindex" in methods or any(
+        pageindex_tool_cfg is not None
+        for _name, _cfg, _vector_tool_cfg, pageindex_tool_cfg in rlm_variants
+    )
+    pageindex = None
+    if pageindex_required:
         pageindex_cfg = cfg.get("pageindex", {})
         pageindex = PageIndexRAG(
             pageindex_cfg,
@@ -100,8 +111,9 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         )
         print(f"Building PageIndex ToC trees for {len(documents)} documents...")
         pageindex.build(documents)
-        systems["pageindex"] = pageindex
-        setup_usage_by_method["pageindex"] = pageindex.setup_usage
+        if "pageindex" in methods:
+            systems["pageindex"] = pageindex
+            setup_usage_by_method["pageindex"] = pageindex.setup_usage
     if "pageindex_official" in methods:
         official_cfg = cfg.get("pageindex_official", {})
         official_pageindex = OfficialPageIndexRAG(
@@ -119,7 +131,7 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
         official_pageindex.build(documents)
         systems["pageindex_official"] = official_pageindex
         setup_usage_by_method["pageindex_official"] = official_pageindex.setup_usage
-    for method_name, rlm_cfg, vector_tool_cfg in rlm_variant_configs(cfg):
+    for method_name, rlm_cfg, vector_tool_cfg, pageindex_tool_cfg in rlm_variants:
         if method_name not in methods:
             continue
         vector_tool_cache_dir = None
@@ -127,17 +139,28 @@ def run_experiment(cfg: dict[str, Any]) -> Path:
             vector_tool_cache_dir = resolve_path(
                 PROJECT_ROOT, vector_tool_cfg.get("cache_dir", ".cache/vector")
             )
+        pageindex_tool_cache_dir = None
+        if pageindex_tool_cfg is not None:
+            pageindex_tool_cache_dir = resolve_path(
+                PROJECT_ROOT, pageindex_tool_cfg.get("cache_dir", ".cache/pageindex")
+            )
         rlm = RLMRAG(
             rlm_cfg,
             llm_cfg=cfg.get("llm", {}),
             method_name=method_name,
             vector_tool_cfg=vector_tool_cfg,
             vector_tool_cache_dir=vector_tool_cache_dir,
+            pageindex_tool_cfg=pageindex_tool_cfg,
+            pageindex_tool_cache_dir=pageindex_tool_cache_dir,
         )
         print(f"Preparing {method_name} retriever for {len(documents)} documents...")
         rlm.build(documents)
         systems[method_name] = rlm
-        setup_usage_by_method[method_name] = Usage()
+        setup_usage_by_method[method_name] = (
+            pageindex.setup_usage
+            if pageindex_tool_cfg is not None and pageindex is not None
+            else Usage()
+        )
 
     run_examples = []
     rows = []
@@ -595,20 +618,21 @@ def vector_variant_configs(cfg: dict[str, Any]) -> list[tuple[str, dict[str, Any
 
 def rlm_variant_configs(
     cfg: dict[str, Any],
-) -> list[tuple[str, dict[str, Any], dict[str, Any] | None]]:
+) -> list[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]]:
     methods = set(resolve_methods(cfg.get("run", {}).get("methods", [])))
-    variants: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
+    variants: list[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = []
     base_cfg = deepcopy(cfg.get("rlm", {}))
     if "rlm" in methods:
-        variants.append(("rlm", base_cfg, None))
+        variants.append(("rlm", base_cfg, None, None))
 
-    if "rlm_recall_plus" in methods:
-        recall_plus_cfg = deep_update(base_cfg, cfg.get("rlm_recall_plus", {}))
+    if "rlm_pageindex" in methods:
+        pageindex_cfg = deep_update(base_cfg, cfg.get("rlm_pageindex", {}))
         variants.append(
             (
-                "rlm_recall_plus",
-                recall_plus_cfg,
-                resolve_rlm_vector_tool_config(cfg, recall_plus_cfg),
+                "rlm_pageindex",
+                pageindex_cfg,
+                resolve_rlm_vector_tool_config(cfg, pageindex_cfg),
+                resolve_rlm_pageindex_tool_config(cfg, pageindex_cfg),
             )
         )
     return variants
@@ -658,6 +682,20 @@ def resolve_rlm_vector_tool_config(
         helper_cfg["force_reindex"] = bool(vector_cfg.get("force_reindex", False))
     if "force_reindex" in tool_cfg:
         helper_cfg["force_reindex"] = bool(tool_cfg.get("force_reindex", False))
+    return helper_cfg
+
+
+def resolve_rlm_pageindex_tool_config(
+    cfg: dict[str, Any], rlm_cfg: dict[str, Any]
+) -> dict[str, Any] | None:
+    tool_cfg = rlm_cfg.get("pageindex_tool") or {}
+    if not bool(tool_cfg.get("enabled", False)):
+        return None
+    pageindex_cfg = deepcopy(cfg.get("pageindex", {}))
+    helper_cfg = deep_update(pageindex_cfg, tool_cfg)
+    helper_cfg["cache_dir"] = str(
+        tool_cfg.get("cache_dir", helper_cfg.get("cache_dir", ".cache/pageindex"))
+    )
     return helper_cfg
 
 

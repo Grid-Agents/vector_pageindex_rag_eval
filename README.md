@@ -127,6 +127,15 @@ scripts/run_experiment.sh \
   --methods vector,rlm
 ```
 
+Run the PageIndex-backed RLM variant:
+
+```bash
+scripts/run_experiment.sh \
+  --benchmark cuad \
+  --n 5 \
+  --methods rlm_pageindex
+```
+
 Runs are retrieval-only by default. Pass `--answer-with-llm` only when you want qualitative answers saved alongside the retrieval results; those answers are not part of precision, recall, or F1.
 
 If you only want to warm caches without running retrieval, use the build-only script:
@@ -207,6 +216,7 @@ RLM settings:
 - `selected_spans`, `max_retrieved_chars_per_span`: output span limits for this evaluator
 - `record_reasoning_trajectory`: save turn count plus each RLM iteration's LLM output and REPL block output in `run.json` and the dashboard
 - RLM sampling now uses the same `random.sample(seed)` behavior as `rlm-eval`, so `seed/n` subsets line up across the two repos
+- `rlm_pageindex.pageindex_tool`: points RLM at cached `.cache/pageindex` trees so it can navigate semantic document structure before falling back to raw-text search
 
 ## Metrics
 

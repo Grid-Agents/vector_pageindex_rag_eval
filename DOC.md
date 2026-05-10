@@ -100,6 +100,8 @@ This gives a closer comparison against the upstream PageIndex approach while kee
 
 When enabled, the runner stores the RLM turn count, final output, and each official RLM iteration's LLM output plus REPL code/stdout/stderr. The dashboard shows this under each RLM question result as a collapsed reasoning trajectory.
 
+`rlm_pageindex` rebuilds that retrieval loop as an agentic PageIndex variant. It loads cached `.cache/pageindex` trees, exposes tools for listing structured documents, searching semantic nodes, traversing children, reading exact node spans, and then lets RLM combine that structure-aware navigation with its original direct document search capability.
+
 ## 3. Evaluation Pipeline
 
 The main entrypoint is:

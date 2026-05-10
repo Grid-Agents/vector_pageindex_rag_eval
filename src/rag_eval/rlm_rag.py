@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -111,6 +112,43 @@ is more efficient.
 {_CITATION_SCHEMA_INSTRUCTION}
 """
 
+_PAGEINDEX_ROOT_PROMPT = f"""\
+You are answering a legal-document retrieval query with an agentic PageIndex workflow.
+
+The variable `context` in your Python REPL holds:
+- context["query"]: the question
+- context["corpus"]: a dict mapping {{document_id: full_text}}
+
+You also have PageIndex cache tools that expose document structure already built in `.cache/pageindex`.
+Use them first to navigate efficiently:
+- `list_pageindex_documents(...)` to inspect available structured documents
+- `search_pageindex_nodes(...)` to find relevant semantic nodes by title/summary/section
+- `list_pageindex_children(...)` to walk down the tree from root nodes into narrower children
+- `read_pageindex_node(...)` to inspect a node and its exact source span
+- `make_span_from_pageindex_node(...)` when a whole cached node is the evidence span
+
+Search policy:
+- Start with PageIndex structure before broad raw-text searching.
+- Prefer the smallest relevant node or set of nodes that answers the query.
+- After locating strong candidate nodes, verify the exact text with `read_pageindex_node(...)` or direct Python access.
+- Use `search_documents(...)`, regex, or direct corpus inspection only as fallback or to refine text inside a chosen document.
+- Keep searching for exceptions, carve-outs, definitions, and follow-on clauses before finalizing.
+- Return multiple spans when the answer is distributed across clauses or modified elsewhere.
+
+You also have a helper `make_span(document_id, snippet)` available in the
+global namespace. It locates `snippet` inside the named corpus document and
+returns a fully-formed span dict with correct character offsets:
+
+    span = make_span("doc.txt", "exact substring of the contract")
+    # -> {{"document_id": "doc.txt", "start_char": 1234,
+    #     "end_char": 1280, "snippet": "exact substring of the contract"}}
+
+Always use `make_span` or `make_span_from_pageindex_node` to construct each
+span in your final answer instead of computing offsets by hand.
+
+{_CITATION_SCHEMA_INSTRUCTION}
+"""
+
 _RESULT_KEYS = {"answer", "spans", "retrieved_spans", "documents", "result_json"}
 
 
@@ -134,6 +172,8 @@ class RLMRAG:
         method_name: str | None = None,
         vector_tool_cfg: dict[str, Any] | None = None,
         vector_tool_cache_dir: Path | None = None,
+        pageindex_tool_cfg: dict[str, Any] | None = None,
+        pageindex_tool_cache_dir: Path | None = None,
     ):
         self.cfg = cfg
         self.llm_cfg = llm_cfg or {}
@@ -143,6 +183,11 @@ class RLMRAG:
         self.vector_tool_cfg = dict(vector_tool_cfg or {})
         self.vector_tool_cache_dir = vector_tool_cache_dir
         self.vector_tool: VectorRAG | None = None
+        self.pageindex_tool_cfg = dict(pageindex_tool_cfg or {})
+        self.pageindex_tool_cache_dir = pageindex_tool_cache_dir
+        self.pageindex_documents: dict[str, dict[str, Any]] = {}
+        self.pageindex_document_catalog: list[dict[str, Any]] = []
+        self.pageindex_node_lookup: dict[tuple[str, str], dict[str, Any]] = {}
 
     def build(self, documents: list[Document]) -> None:
         self.documents = {doc.document_id: doc for doc in documents}
@@ -158,6 +203,11 @@ class RLMRAG:
         self.vector_tool = None
         if self._vector_tool_enabled():
             self.vector_tool = self._build_vector_tool(documents)
+        self.pageindex_documents = {}
+        self.pageindex_document_catalog = []
+        self.pageindex_node_lookup = {}
+        if self._pageindex_tool_enabled():
+            self._load_pageindex_tool(documents)
 
     def query(self, query: str) -> RetrievalOutput:
         if not self.documents:
@@ -196,6 +246,7 @@ class RLMRAG:
             "rlm_usage_summary": trajectory["usage_summary"],
             "rlm_parse_source": parse_source,
             "rlm_vector_tool_enabled": self.vector_tool is not None,
+            "rlm_pageindex_tool_enabled": bool(self.pageindex_documents),
         }
         if record_reasoning:
             metadata["reasoning_trajectory"] = trajectory
@@ -290,6 +341,8 @@ class RLMRAG:
 
     def _root_prompt(self) -> str:
         prompt_style = str(self.cfg.get("prompt_style", "baseline")).lower()
+        if prompt_style == "pageindex":
+            return _PAGEINDEX_ROOT_PROMPT
         if prompt_style != "recall_plus":
             return _BASE_ROOT_PROMPT
 
@@ -350,6 +403,46 @@ class RLMRAG:
                 "description": "Return the character length for a document_id.",
             },
         }
+        if self.pageindex_documents:
+            tools.update(
+                {
+                    "list_pageindex_documents": {
+                        "tool": self._tool_list_pageindex_documents,
+                        "description": (
+                            "List documents with cached PageIndex trees. "
+                            "Accepts optional limit and offset integer arguments."
+                        ),
+                    },
+                    "search_pageindex_nodes": {
+                        "tool": self._tool_search_pageindex_nodes,
+                        "description": (
+                            "Search cached PageIndex nodes by semantic summaries/title/section. "
+                            "Arguments: query, document_id=None, limit=10, include_text=false."
+                        ),
+                    },
+                    "list_pageindex_children": {
+                        "tool": self._tool_list_pageindex_children,
+                        "description": (
+                            "List child nodes for a cached PageIndex node. "
+                            "Arguments: document_id, node_id=None, limit=50."
+                        ),
+                    },
+                    "read_pageindex_node": {
+                        "tool": self._tool_read_pageindex_node,
+                        "description": (
+                            "Read one cached PageIndex node and optionally its exact source text. "
+                            "Arguments: document_id, node_id, include_text=true."
+                        ),
+                    },
+                    "make_span_from_pageindex_node": {
+                        "tool": self._tool_make_span_from_pageindex_node,
+                        "description": (
+                            "Create an exact span dict from a cached PageIndex node. "
+                            "Arguments: document_id, node_id, max_chars=None."
+                        ),
+                    },
+                }
+            )
         if self.vector_tool is not None:
             tools["vector_search"] = {
                 "tool": self._tool_vector_search,
@@ -509,6 +602,114 @@ class RLMRAG:
                 item["text"] = span.text
             items.append(item)
         return items
+
+    def _tool_list_pageindex_documents(
+        self, limit: int = 20, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 200))
+        offset = max(0, int(offset))
+        return self.pageindex_document_catalog[offset : offset + limit]
+
+    def _tool_search_pageindex_nodes(
+        self,
+        query: str,
+        document_id: str | None = None,
+        limit: int = 10,
+        include_text: bool = False,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), int(self.cfg.get("max_tool_results", 50))))
+        doc_filter = str(document_id or "").strip()
+        terms = _query_terms(str(query), max_terms=int(self.cfg.get("max_search_terms", 12)))
+        if not terms:
+            terms = [str(query).strip().lower()] if str(query).strip() else []
+
+        results: list[dict[str, Any]] = []
+        for doc_id, tree in self.pageindex_documents.items():
+            if doc_filter and doc_id != doc_filter:
+                continue
+            for node in _walk_pageindex_nodes(tree):
+                haystacks = {
+                    "title": str(node.get("title", "")).lower(),
+                    "summary": str(node.get("summary", "")).lower(),
+                    "section": str(node.get("section_title", "")).lower(),
+                }
+                score = 0.0
+                matched_terms: list[str] = []
+                for term in terms:
+                    if not term:
+                        continue
+                    matched = False
+                    if term in haystacks["title"]:
+                        score += 4.0
+                        matched = True
+                    if term in haystacks["summary"]:
+                        score += 2.0
+                        matched = True
+                    if term in haystacks["section"]:
+                        score += 1.0
+                        matched = True
+                    if matched:
+                        matched_terms.append(term)
+                if score <= 0:
+                    continue
+                item = self._pageindex_node_payload(doc_id, node, include_text=include_text)
+                item["score"] = score
+                item["matched_terms"] = matched_terms
+                results.append(item)
+        results.sort(
+            key=lambda item: (
+                float(item.get("score") or 0.0),
+                -int(item.get("start_char") or 0),
+            ),
+            reverse=True,
+        )
+        return results[:limit]
+
+    def _tool_list_pageindex_children(
+        self, document_id: str, node_id: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 200))
+        doc_id = str(document_id)
+        tree = self.pageindex_documents.get(doc_id)
+        if tree is None:
+            raise KeyError(f"Unknown PageIndex document_id: {document_id}")
+        node = tree if not node_id else self._get_pageindex_node(doc_id, str(node_id))
+        children = node.get("children") or []
+        if not isinstance(children, list):
+            return []
+        return [
+            self._pageindex_node_payload(doc_id, child, include_text=False)
+            for child in children[:limit]
+            if isinstance(child, dict)
+        ]
+
+    def _tool_read_pageindex_node(
+        self, document_id: str, node_id: str, include_text: bool = True
+    ) -> dict[str, Any]:
+        doc_id = str(document_id)
+        node = self._get_pageindex_node(doc_id, str(node_id))
+        return self._pageindex_node_payload(doc_id, node, include_text=bool(include_text))
+
+    def _tool_make_span_from_pageindex_node(
+        self, document_id: str, node_id: str, max_chars: int | None = None
+    ) -> dict[str, Any]:
+        doc_id = str(document_id)
+        node = self._get_pageindex_node(doc_id, str(node_id))
+        doc = self.documents.get(doc_id)
+        if doc is None:
+            raise KeyError(f"Unknown document_id: {document_id}")
+        start = max(0, min(int(node.get("start_char", 0)), len(doc.text)))
+        end = max(start, min(int(node.get("end_char", start)), len(doc.text)))
+        if max_chars is not None:
+            end = min(end, start + max(1, int(max_chars)))
+        snippet = doc.text[start:end]
+        return {
+            "document_id": doc_id,
+            "start_char": start,
+            "end_char": end,
+            "snippet": snippet,
+            "node_id": str(node.get("node_id", "")),
+        }
 
     def _spans_from_completion(
         self,
@@ -704,6 +905,9 @@ class RLMRAG:
     def _vector_tool_enabled(self) -> bool:
         return bool((self.cfg.get("vector_tool") or {}).get("enabled", False))
 
+    def _pageindex_tool_enabled(self) -> bool:
+        return bool((self.cfg.get("pageindex_tool") or {}).get("enabled", False))
+
     def _build_vector_tool(self, documents: list[Document]) -> VectorRAG:
         if not self.vector_tool_cfg:
             raise RuntimeError(
@@ -715,6 +919,117 @@ class RLMRAG:
         vector_tool = VectorRAG(self.vector_tool_cfg, cache_dir=cache_dir)
         vector_tool.build(documents)
         return vector_tool
+
+    def _load_pageindex_tool(self, documents: list[Document]) -> None:
+        cache_dir = self.pageindex_tool_cache_dir or Path(
+            self.pageindex_tool_cfg.get("cache_dir", ".cache/pageindex")
+        )
+        for doc in documents:
+            cache_path = cache_dir / f"{self._pageindex_doc_hash(doc)}.json"
+            if not cache_path.exists():
+                raise RuntimeError(
+                    f"{self.method_name} requires PageIndex cache for {doc.document_id}, "
+                    f"but {cache_path} does not exist."
+                )
+            with open(cache_path, "r", encoding="utf-8") as f:
+                tree = json.load(f)
+            self.pageindex_documents[doc.document_id] = tree
+            nodes = [node for node in _walk_pageindex_nodes(tree)]
+            for node in nodes:
+                node_id = str(node.get("node_id", ""))
+                if node_id:
+                    self.pageindex_node_lookup[(doc.document_id, node_id)] = node
+            self.pageindex_document_catalog.append(
+                {
+                    "document_id": doc.document_id,
+                    "title": str(tree.get("title", "")),
+                    "summary": str(tree.get("summary", "")),
+                    "unit_start": tree.get("unit_start"),
+                    "unit_end": tree.get("unit_end"),
+                    "node_count": len(nodes),
+                    "root_node_id": str(tree.get("node_id", "")),
+                }
+            )
+        self.pageindex_document_catalog.sort(key=lambda item: item["document_id"])
+
+    def _get_pageindex_node(self, document_id: str, node_id: str) -> dict[str, Any]:
+        node = self.pageindex_node_lookup.get((document_id, node_id))
+        if node is None:
+            raise KeyError(
+                f"Unknown PageIndex node_id {node_id!r} for document_id {document_id!r}"
+            )
+        return node
+
+    def _pageindex_node_payload(
+        self, document_id: str, node: dict[str, Any], *, include_text: bool
+    ) -> dict[str, Any]:
+        doc = self.documents.get(document_id)
+        if doc is None:
+            raise KeyError(f"Unknown document_id: {document_id}")
+        start = max(0, min(int(node.get("start_char", 0)), len(doc.text)))
+        end = max(start, min(int(node.get("end_char", start)), len(doc.text)))
+        payload = {
+            "document_id": document_id,
+            "node_id": str(node.get("node_id", "")),
+            "node_kind": str(node.get("node_kind", "")),
+            "title": str(node.get("title", "")),
+            "summary": str(node.get("summary", "")),
+            "section_title": str(node.get("section_title", "")),
+            "start_char": start,
+            "end_char": end,
+            "unit_start": node.get("unit_start"),
+            "unit_end": node.get("unit_end"),
+            "child_count": len(node.get("children") or []),
+        }
+        if include_text:
+            payload["text"] = doc.text[start:end]
+        return payload
+
+    def _pageindex_doc_hash(self, doc: Document) -> str:
+        payload = {
+            "document_id": doc.document_id,
+            "length": len(doc.text),
+            "sha1": hashlib.sha1(doc.text.encode("utf-8")).hexdigest(),
+            "build_config": self._pageindex_build_cache_config(),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(encoded.encode("utf-8")).hexdigest()
+
+    def _pageindex_build_cache_config(self) -> dict[str, Any]:
+        return {
+            "build_with_llm": bool(self.pageindex_tool_cfg.get("build_with_llm", True)),
+            "virtual_page_target_tokens": int(
+                self.pageindex_tool_cfg.get("virtual_page_target_tokens", 900)
+            ),
+            "virtual_page_max_tokens": int(
+                self.pageindex_tool_cfg.get("virtual_page_max_tokens", 1200)
+            ),
+            "toc_check_units": int(self.pageindex_tool_cfg.get("toc_check_units", 20)),
+            "max_units_per_node": int(self.pageindex_tool_cfg.get("max_units_per_node", 10)),
+            "max_tokens_per_node": int(
+                self.pageindex_tool_cfg.get("max_tokens_per_node", 20000)
+            ),
+            "node_summary_max_tokens": int(
+                self.pageindex_tool_cfg.get("node_summary_max_tokens", 220)
+            ),
+            "root_summary_max_tokens": int(
+                self.pageindex_tool_cfg.get("root_summary_max_tokens", 260)
+            ),
+        }
+
+
+def _walk_pageindex_nodes(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        nodes.append(node)
+        children = node.get("children") or []
+        if isinstance(children, list):
+            stack.extend(reversed([child for child in children if isinstance(child, dict)]))
+    return nodes
 
 
 def _import_official_rlm() -> tuple[Any, Any]:
